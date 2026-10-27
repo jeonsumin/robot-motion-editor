@@ -32,7 +32,7 @@ test('right-click an item bar or tree child row → export하기 saves exactly t
   const menu = page.getByRole('menu', { name: '클립' })
   const LANE2 = 24 + 28 * 2 + 14 // the cut opened one lane per piece below the track row (ruler 24, rows 28)
   await page.mouse.click(box.x + 400, box.y + LANE2, { button: 'right' }) // second piece's bar in its lane (frames 60-120 at 4 px/frame, label 160)
-  await expect(menu.getByRole('menuitem')).toHaveText(['export하기', '물리 검증'])
+  await expect(menu.getByRole('menuitem')).toHaveText(['export하기', '물리 검증', '재생헤드 고정'])
   await expect(menu.getByRole('menuitem').first()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)

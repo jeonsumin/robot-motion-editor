@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseCsvPoses } from '../export/importCsv'
 import type { Pose } from '../model/pose'
+import type { Clip } from '../model/types'
 import { getEditor, trackLocked, useEditor } from '../store/store'
 import { blockUrl, GO2_BLOCKS, type Block } from './blocks'
 import { blockActual, buildBlockClip, emptyClipFor } from './build'
 
-type Template = { fps: number; poses: Pose[] }
+export type Template = { fps: number; poses: Pose[] }
 // One fetch per block; a failed load is dropped so picking the block again retries.
 const cache = new Map<string, Promise<Template>>()
 const loaded = new Map<string, Template>()
@@ -27,7 +28,7 @@ export function loadTemplate(id: string): Promise<Template> {
 // The values a loop block can really make (user: no 1 m / 100° in the list when the log cannot do it): whole steps n = 1..STEPS,
 // per direction (Rotate: 좌 then 우). Each option's value lands exactly on its n (blockActual rounds to the nearest step).
 const STEPS = 20
-const stepOptions = (b: Block, poses: Template['poses']): { v: string; label: string }[] =>
+export const stepOptions = (b: Block, poses: Template['poses']): { v: string; label: string }[] =>
   b.kind !== 'loop' ? [] : (b.param === 'degrees' ? [1, -1] : [1]).flatMap(sg => {
     const one = blockActual(b, poses, sg)!
     return Array.from({ length: STEPS }, (_, k) => {
@@ -81,13 +82,42 @@ const stepWhy = (a: { base: number; per: number }, unit: string) => {
   return `실제 GO2 로그를 이어 붙여 만듭니다: 시작·멈춤 동작만으로 ${f(a.base)}, 한 걸음마다 ${f(a.per)}. 걸음은 1번 이상 통째로만 넣을 수 있어 가장 작은 값은 ${f(a.base + a.per)}이고, 그 뒤로 ${f(a.per)}씩 커집니다.`
 }
 
+export type AddTarget = string | null | 'asset' // a GO2 actor id (its track end), null = a new GO2 actor, 'asset' = 목록에만 추가
+export type Added = { actorId: string | null; name: string; reused: boolean }
+
+/** Build the block clip (a loop block at the step value `v`; Empty = the one Empty clip) and add it to `target`. The same block already
+ * in 목록 (same name) is used as it is (user). Shared by the 추가 button and the right-click menu. Returns null when nothing was added. */
+export function addBlock(block: Block, t: Template | undefined, v: number, target: AddTarget): Added | null {
+  const a = blockAsset(block, t, v)
+  if (!a) return null
+  const st = getEditor().getState(), have = a.clip ? undefined : st.project.clips[a.id], clip = have ?? a.clip!
+  if (target === 'asset') { // 목록에만 추가
+    if (have) return { actorId: null, name: have.name, reused: true }
+    const name = st.addClipAsset(clip); return name ? { actorId: null, name, reused: false } : null
+  }
+  const itemId = st.appendClip(target, clip)
+  const p = getEditor().getState().project, track = itemId ? p.sequence.tracks.find(tr => tr.items.some(i => i.id === itemId)) : null
+  return itemId && track?.actorId ? { actorId: track.actorId, name: p.clips[clip.id]?.name ?? clip.name, reused: !!have } : null
+}
+
+/** The clip a block makes at `v` (for a drop / an insert that needs the clip itself): the 목록 clip of the same name when there is one. */
+export function blockAsset(block: Block, t: Template | undefined, v: number): { kind: 'clip'; id: string; clip?: Clip } | null {
+  const st = getEditor().getState(), built = block.kind === 'empty' ? emptyClipFor(st.project.clips, st.defs) : t ? buildBlockClip(block, t.poses, t.fps, v, st.defs) : null
+  if (!built) return null
+  const have = st.project.clips[built.id] ?? Object.values(st.project.clips).find(c => c.robot === 'go2' && c.name === built.name)
+  return have ? { kind: 'clip', id: have.id } : { kind: 'clip', id: built.id, clip: built }
+}
+
 // The 라이브러리 tab's input for the picked block. target: a GO2 actor id (its track end), null = a new GO2 actor, 'asset' = 목록에만
 // 추가 (the asset list only, nothing on the sequence). onAdded gets the actor the block went to (null for 목록 only), the clip name and
 // whether an existing 목록 clip was used (same name: no new clip, user).
-export default function Go2BlockPanel({ target, blockId, onAdded }: { target: string | null | 'asset'; blockId: string; onAdded?: (actorId: string | null, name: string, reused: boolean) => void }) {
+// value / onValue: the chosen step value kept by the list (the right-click menu adds the same value), else kept here.
+export default function Go2BlockPanel({ target, blockId, onAdded, value: shared, onValue }: { target: AddTarget; blockId: string; onAdded?: (actorId: string | null, name: string, reused: boolean) => void
+  value?: string; onValue?: (v: string) => void }) {
   const locked = useEditor(s => !!target && target !== 'asset' && trackLocked(s.project, target))
   const block = GO2_BLOCKS.find(b => b.id === blockId)!
-  const [value, setValue] = useState('') // a loop block's chosen step value (the first reachable one once its template loads)
+  const [own, setOwn] = useState('') // a loop block's chosen step value (the first reachable one once its template loads)
+  const value = shared ?? own, setValue = (v: string) => { setOwn(v); onValue?.(v) }
   const [tpl, setTpl] = useState<{ id: string; t?: Template; err?: string } | null>(null)
 
   useEffect(() => {
@@ -110,16 +140,8 @@ export default function Go2BlockPanel({ target, blockId, onAdded }: { target: st
 
   const add = () => {
     if (!ready || !valid) return
-    const st = getEditor().getState(), built = empty ? emptyClipFor(st.project.clips, st.defs) : buildBlockClip(block, t!.poses, t!.fps, v, st.defs)
-    // the same block (same name: Rotate_168deg, Hello…; Empty: the one Empty clip) already in 목록: no new clip (user) — a robot gets that one appended
-    const have = st.project.clips[built.id] ?? Object.values(st.project.clips).find(c => c.robot === 'go2' && c.name === built.name), clip = have ?? built
-    if (target === 'asset') { // 목록에만 추가
-      if (have) { onAdded?.(null, have.name, true); return }
-      const name = st.addClipAsset(clip); if (name) onAdded?.(null, name, false); return
-    }
-    const itemId = st.appendClip(target, clip)
-    const p = getEditor().getState().project, track = itemId ? p.sequence.tracks.find(tr => tr.items.some(i => i.id === itemId)) : null
-    if (itemId && track?.actorId) onAdded?.(track.actorId, p.clips[clip.id]?.name ?? clip.name, !!have)
+    const r = addBlock(block, t, v, target)
+    if (r) onAdded?.(r.actorId, r.name, r.reused)
   }
 
   return (

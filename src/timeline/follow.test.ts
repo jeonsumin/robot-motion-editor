@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { followTarget } from './follow'
+import { followTarget, wheelFrames } from './follow'
 
 const V = 300, END = 3000 // visible frames, content end
 
@@ -31,4 +31,11 @@ test('clamps to contentEnd - 0.85*visible', () => {
 })
 test('content shorter than window -> 0', () => {
   expect(followTarget(500, 50, V, 100, 'jump')).toBe(0)
+})
+
+test('wheelFrames: up = later, down = earlier; a sideways swipe keeps its direction; lines become px', () => {
+  expect(wheelFrames({ deltaX: 0, deltaY: -100, deltaMode: 0 }, 4)).toBe(25)
+  expect(wheelFrames({ deltaX: 0, deltaY: 100, deltaMode: 0 }, 4)).toBe(-25)
+  expect(wheelFrames({ deltaX: 80, deltaY: 10, deltaMode: 0 }, 4)).toBe(20)
+  expect(wheelFrames({ deltaX: 0, deltaY: -3, deltaMode: 1 }, 4)).toBe(30)
 })

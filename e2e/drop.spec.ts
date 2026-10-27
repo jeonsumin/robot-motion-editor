@@ -33,7 +33,14 @@ test('drop: card onto a piece inserts at its nearer edge (front half: before it,
   await card.dragTo(seq, { targetPosition: { x: await xAt(160), y: 24 + 14 } }) // back half of a (60..180): b after it
   expect(await tracks(page)).toEqual([[[60, 120], [0, 60], [180, 60]]])
 
+  // the track opened its piece lanes (one per piece, by start: 0..60, 60..180, 180..240): a lane drop goes by its piece, not the frame
+  const lane = (k: number) => 24 + 28 * (k + 1) + 14 // ruler, track row, then lane k (row 28 px)
+  await card.dragTo(seq, { targetPosition: { x: await xAt(220), y: lane(0) } }) // empty part of lane 1, under the third piece: right after the first
+  expect(await tracks(page)).toEqual([[[120, 120], [0, 60], [240, 60], [60, 60]]])
+  await card.dragTo(seq, { targetPosition: { x: await xAt(20), y: lane(3) } }) // left of the last piece (240..300) in its lane: before it
+  expect(await tracks(page)).toEqual([[[120, 120], [0, 60], [300, 60], [60, 60], [240, 60]]])
+
   await card.dragTo(seq, { targetPosition: { x: 500, y: box.height - 20 } }) // empty area below the tracks
-  expect(await tracks(page)).toEqual([[[60, 120], [0, 60], [180, 60]], [[expect.any(Number), 60]]])
+  expect(await tracks(page)).toEqual([[[120, 120], [0, 60], [300, 60], [60, 60], [240, 60]], [[expect.any(Number), 60]]])
   expect(errors).toEqual([])
 })

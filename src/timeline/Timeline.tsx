@@ -8,7 +8,7 @@ import GraphCanvas from './GraphCanvas'
 import { draggedAsset, dropAssetInClipView, isAssetDrag } from './assetDrop'
 import SequenceCanvas from './SequenceCanvas'
 import TrackCanvas from './TrackCanvas'
-import { formatTimecode } from './timeScale'
+import { formatTimecode, parseTimecode } from './timeScale'
 import { usePhysics } from '../physics/physicsStore'
 import { cancelAll } from '../physics/runItem'
 import { PHYS_NOTE } from './physGraph'
@@ -33,6 +33,33 @@ function CutControl({ disabled }: { disabled: boolean }) {
         onKeyDown={ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close() } }} onFocus={ev => ev.target.select()} />
       <button type="submit">자르기</button>
       <button type="button" aria-label="자르기 닫기" onClick={close}>✕</button>
+      {msg && <span className="tl-cutmsg" role="status">{msg}</span>}
+    </form>
+  )
+}
+
+// 시간·프레임 입력해서 이동(사용자): 현재 시간을 누르면 입력 칸 — 프레임 번호 또는 분:초.프레임, Enter = 이동(0~끝으로 맞춤), Esc·칸 밖 = 취소.
+// 재생헤드 고정 중에도 이동(직접 조작), 화면 밖이면 기존 따라가기가 그 위치로 넘김.
+function TimeJump({ frame, end }: { frame: number; end: number }) {
+  const [val, setVal] = useState<string | null>(null), [msg, setMsg] = useState('')
+  const close = () => { setVal(null); setMsg('') }
+  if (val === null) return (
+    <span className="tl-time">
+      <button className="tl-timebtn" aria-label="시간 입력해서 이동" title="눌러서 프레임 번호 또는 분:초.프레임을 입력하면 그 위치로 이동합니다"
+        onClick={() => { setVal(formatTimecode(frame)); setMsg('') }}><b>{formatTimecode(frame)}</b></button>
+      <span className="tl-dim"> / {formatTimecode(end)}</span>
+    </span>
+  )
+  const go = () => {
+    const f = parseTimecode(val)
+    if (f === null) { setMsg('프레임 번호 또는 분:초.프레임으로 입력하세요'); return }
+    getEditor().getState().setFrame(Math.min(Math.max(f, 0), end))
+    close()
+  }
+  return (
+    <form className="tl-cutform" role="group" aria-label="시간 입력" onSubmit={ev => { ev.preventDefault(); go() }}>
+      <input autoFocus aria-label="이동할 프레임 또는 시간" placeholder="11192 / 02:25.43" value={val} onChange={ev => { setVal(ev.target.value); setMsg('') }}
+        onKeyDown={ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close() } }} onFocus={ev => ev.target.select()} onBlur={close} />
       {msg && <span className="tl-cutmsg" role="status">{msg}</span>}
     </form>
   )
@@ -86,7 +113,7 @@ function TimelineHeader() {
           {playing ? <path d="M2.5 1.5h2.5v9H2.5zM7 1.5h2.5v9H7z" fill="currentColor" /> : <path d="M3 1.2v9.6L10.6 6z" fill="currentColor" />}
         </svg>
       </button>
-      <span className="tl-time"><b>{formatTimecode(frame)}</b><span className="tl-dim"> / {formatTimecode(shownEnd)}</span></span>
+      <TimeJump frame={frame} end={shownEnd} />
       <span className="tl-fps">60 fps</span>
       <span className="tl-sep" aria-hidden="true" />
       <CutControl disabled={clipView} />

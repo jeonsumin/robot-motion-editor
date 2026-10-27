@@ -52,6 +52,12 @@ export function followStep(g: FollowGeom, now = performance.now()): boolean {
   return anim !== null
 }
 
+/** 휠 = 구간 이동(사용자): 위로 굴리면 뒤쪽 시간, 아래로 굴리면 앞쪽 시간; 트랙패드 좌우 밀기는 그 방향 그대로. 화면이 움직일 프레임 수. */
+export function wheelFrames(e: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode'>, ppf: number): number {
+  const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1 // lines / pages -> px
+  return (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : -e.deltaY) * unit / ppf
+}
+
 /** Edge auto-scroll while the playhead follows the pointer (hover scrub or a ruler drag, user): past 90% of the track area [left, right]
  *  the window scrolls right, before 10% left, faster the deeper in, within [min, max] scroll frames; `tick(x)` puts the playhead back
  *  under the pointer after each step. `at(x)` on every pointer move, `stop()` when the pointer leaves or the scrub ends. */

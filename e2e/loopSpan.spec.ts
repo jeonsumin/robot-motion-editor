@@ -38,7 +38,8 @@ test('right-drag opens a looping 구간 프리뷰; main playback untouched; ✕ 
   expect((await st()).span).toBeNull()
   await drag(30, 90)
   await expect.poll(async () => (await st()).span).toEqual([30, 91])
-  await page.mouse.click(box.x + await xAt(200), box.y + 10, { button: 'right' }) // ruler right-click: closes it
+  await page.mouse.click(box.x + await xAt(200), box.y + 10, { button: 'right' }) // ruler right-click: its menu closes it
+  await page.getByRole('menu', { name: '재생헤드' }).getByRole('menuitem', { name: '구간 프리뷰 닫기' }).click()
   await expect.poll(async () => (await st()).span).toBeNull()
   expect(errors).toEqual([])
 })

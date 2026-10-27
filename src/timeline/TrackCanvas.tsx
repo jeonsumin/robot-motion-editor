@@ -5,7 +5,7 @@ import { actorOf, clampDf, CLIP_ACTOR, clipLocked, editingItem, editTarget, getE
 import type { Interp, Sequence } from '../model/types'
 import { tv } from './viewState'
 import { buildRows, frameToX, hitKey, hoverFrame, hoverScrub, keysIn, xToFrame, type TimeScale } from './timeScale'
-import { edgeScroll, followStep, markHover, markUserScroll, resetFollow } from './follow'
+import { edgeScroll, followStep, markHover, markUserScroll, resetFollow, wheelFrames } from './follow'
 import { drawRuler, LABEL_W, RULER_H } from './ruler'
 import { drawPieceBounds, drawRangeBand, minScrollF, startRangeDrag } from './rangeBand'
 import { drawScrollbar, pressScrollbar, SB_W, sbGeom } from './vscroll'
@@ -122,7 +122,7 @@ export default function TrackCanvas() {
         drawPieceBounds(ctx, sc, e.item, RULER_H, H, LABEL_W, W, C)
       }
       const pa = e?.actorId ?? s.sel.actorId, tg = pa ? editTarget(s, pa) : null, cf = tg?.f ?? 0
-      drawRuler(ctx, sc, W, RULER_H, NO_SEQ, cf, C, true)
+      drawRuler(ctx, sc, W, RULER_H, NO_SEQ, cf, C, true, s.playheadPinned)
       if (s.range) drawRangeBand(ctx, sc, s.range, 0, H, LABEL_W, W, C.accent)
 
       if (u.box) {
@@ -241,10 +241,11 @@ export default function TrackCanvas() {
       const { x, y } = pos(e), over = y >= top() && x >= W - SB_W && !!sbar()
       if (over !== sbHover) { sbHover = over; schedule() }
       if (over) { if (!edgeDrag) edge.stop(); return }
-      const f = hoverFrame(pos(e).x, LABEL_W, scale(), e.buttons !== 0 || ed.getState().playing || menuOpen.current || !editingItem(ed.getState()))
+      const f = hoverFrame(pos(e).x, LABEL_W, scale(), e.buttons !== 0 || hoverOff())
       if (f !== null) { hover.push(toSeq(f)); edge.at(x) } else if (!edgeDrag) edge.stop()
     }
 
+    const hoverOff = () => { const s = ed.getState(); return s.playing || s.playheadPinned || menuOpen.current || !editingItem(s) }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       markUserScroll()
@@ -255,7 +256,11 @@ export default function TrackCanvas() {
       } else if (e.shiftKey || pos(e).x < LABEL_W || pos(e).x >= W - SB_W) { // vertical scroll (Shift, or over the labels / scrollbar)
         const max = Math.max(0, rows().length * ROW_H - (H - top()))
         u.scrollY = Math.min(Math.max(u.scrollY + (e.deltaY || e.deltaX), 0), max)
-      } else tv.scrollF = Math.max(minScrollF(), tv.scrollF + (e.deltaY + e.deltaX) / tv.ppf)
+      } else { // 휠 = 구간 이동 (user, like the sequence): up = later; the playhead keeps following the pointer unless 고정
+        tv.scrollF = Math.max(minScrollF(), tv.scrollF + wheelFrames(e, tv.ppf))
+        const f = hoverFrame(pos(e).x, LABEL_W, scale(), hoverOff())
+        if (f !== null) hover.push(toSeq(f))
+      }
       schedule()
     }
 

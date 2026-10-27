@@ -212,3 +212,49 @@ test('라이브러리 folders: folded by default, open on click, a name filter o
   await add(page).click()
   await expect.poll(() => page.evaluate(() => Object.values((window as any).__editor.getState().project.clips).some((c: any) => c.name === '스핑크스' && c.robot === 'go2'))).toBe(true)
 })
+
+test('우클릭 메뉴: 위치만 고름 — 로봇 ▸ 맨 앞 / 맨 뒤, 목록에만; 값은 설정 칸 값(처음엔 가장 작은 값)', async ({ page }) => {
+  await boot(page)
+  const id = await addGo2(page)
+  const n0 = (await trackItems(page, id)).length // a new actor comes with its starter piece
+  await library(page)
+  const menu = page.getByRole('menu', { name: '라이브러리' })
+  // Stretch at the track end, twice (two pieces 0..L, L..2L)
+  for (const _ of [0, 1]) {
+    await row(page, 'Stretch').click({ button: 'right' })
+    await expect(menu.locator('.tl-menu-head')).toHaveText('Stretch')
+    await menu.getByRole('menuitem', { name: 'GO2 #1' }).click()
+    await page.getByRole('menuitem', { name: '맨 뒤에 추가' }).click()
+  }
+  await expect.poll(async () => (await trackItems(page, id)).length).toBe(n0 + 2)
+  const [a, b] = (await trackItems(page, id)).slice(n0)
+  expect([a.name, b.name, b.start]).toEqual(['Stretch', 'Stretch', a.start + a.len])
+
+  // Rotate: the head shows the value it adds — the smallest at first, then the one picked in the 설정 칸
+  await row(page, 'Rotate').click({ button: 'right' })
+  await expect(menu.locator('.tl-menu-head')).toContainText(/Rotate · 좌 \d+° \(1걸음\)/)
+  await expect(menu.locator('.tl-menu-head')).toContainText('최저 값으로 우선 설정')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await page.getByRole('button', { name: '값' }).click()
+  await page.getByRole('option', { name: /\(2걸음\)/ }).first().click()
+  await row(page, 'Rotate').click({ button: 'right' })
+  await expect(menu.locator('.tl-menu-head')).toContainText('(2걸음)')
+  await expect(menu.locator('.tl-menu-head')).not.toContainText('최저 값')
+
+  // 맨 앞에 추가: before the first piece, every piece pushed back by the clip length
+  const all0 = await trackItems(page, id)
+  await menu.getByRole('menuitem', { name: 'GO2 #1' }).click()
+  await page.getByRole('menuitem', { name: '맨 앞에 추가' }).click()
+  await expect.poll(async () => (await trackItems(page, id)).length).toBe(n0 + 3)
+  const all = await trackItems(page, id), rot = all[0]
+  expect(rot).toMatchObject({ start: all0[0].start, name: expect.stringMatching(/^Rotate_/) })
+  expect(all.slice(1).map(i => i.start)).toEqual(all0.map(i => i.start + rot.len))
+  await expect(page.getByText(/맨 앞에 추가했습니다: Rotate_/)).toBeVisible()
+
+  // 목록에만 추가: the same block is not made twice
+  await row(page, 'Hello').click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: '목록에만 추가' }).click()
+  await expect(page.getByText(/목록에 추가했습니다: Hello/)).toBeVisible()
+  expect((await trackItems(page, id)).length).toBe(n0 + 3)
+})

@@ -21,6 +21,17 @@ export function formatTimecode(f: number): string {
   return `${p2(Math.floor(sec / 60))}:${p2(sec % 60)}.${p2(f % 60)}`
 }
 
+/** 시간·프레임 입력(사용자): 숫자만 = 프레임 번호, 콜론이 있으면 화면 표시와 같은 "분:초.프레임"(프레임 0~59, 생략 = 0; 한 자리 ".4" = 4프레임).
+ * 형식이 틀리면 null. */
+export function parseTimecode(text: string): number | null {
+  const t = text.trim()
+  if (/^\d+$/.test(t)) return Number(t)
+  const m = /^(\d+):(\d{1,2})(?:\.(\d{1,2}))?$/.exec(t)
+  if (!m) return null
+  const sec = Number(m[2]), fr = m[3] === undefined ? 0 : Number(m[3])
+  return sec > 59 || fr > 59 ? null : (Number(m[1]) * 60 + sec) * 60 + fr
+}
+
 export interface Row { kind: 'group'; actorId: string; label: string; channels: string[] }
 export const ROOT_CHANNELS = ['root.x', 'root.y', 'root.z', 'root.roll', 'root.pitch', 'root.yaw']
 

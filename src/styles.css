@@ -193,6 +193,8 @@ body {
 .tl-menu button { background: none; color: var(--text); border: 0; font: inherit; font-size: 13px; padding: 5px 12px; text-align: left; cursor: pointer; }
 .tl-menu button:hover { background: var(--bg); }
 .tl-menu button[aria-disabled=true] { opacity: .45; cursor: default; }
+.tl-menu-head { padding: 5px 12px 6px; margin-bottom: 3px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12px; line-height: 1.5; }
+.tl-menu-head > div + div { font-size: 11px; }
 .mb-menu { position: fixed; z-index: 10; display: flex; flex-direction: column; min-width: 200px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; padding: 2px 0; }
 #menubar .mb-menu button { display: flex; justify-content: space-between; gap: 24px; width: 100%; box-sizing: border-box; background: none; border: 0; border-radius: 0; padding: 5px 12px; text-align: left; }
 #menubar .mb-menu button:hover, #menubar .mb-menu button:focus { background: var(--bg); }
@@ -293,6 +295,8 @@ body {
 .tl-cutform button { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 3px; font: inherit; font-size: 12px; padding: 1px 8px; cursor: pointer; }
 .tl-cutform button[type=submit] { border-color: var(--accent); color: var(--accent); }
 .tl-cutmsg { font-size: 12px; color: var(--accent); }
+.tl-timebtn { background: none; border: 1px solid transparent; border-radius: 3px; color: inherit; font: inherit; padding: 0 3px; margin: 0 -4px 0 0; cursor: text; font-variant-numeric: tabular-nums; }
+.tl-timebtn:hover { border-color: var(--line); }
 .tl-seg { display: inline-flex; flex: none; }
 .tl-seg button { background: var(--bg); color: var(--dim); border: 1px solid var(--line); font: inherit; font-size: 12px; padding: 2px 10px; cursor: pointer; }
 .tl-seg button:first-child { border-radius: 3px 0 0 3px; }

@@ -20,7 +20,8 @@ export function hitMarker(seq: Sequence, sc: TimeScale, x: number): number | nul
 }
 
 /** `frames`: (sequence and clip view) each label also shows its frame number, and the playhead carries a tag with the current frame. */
-export function drawRuler(ctx: CanvasRenderingContext2D, sc: TimeScale, w: number, h: number, seq: Sequence, frame: number, C: Colors, frames = false): void {
+/** `pinned`: 재생헤드 고정 중 — the frame tag is drawn hollow (accent outline and text on the dark background). */
+export function drawRuler(ctx: CanvasRenderingContext2D, sc: TimeScale, w: number, h: number, seq: Sequence, frame: number, C: Colors, frames = false, pinned = false): void {
   ctx.fillStyle = C.panel; ctx.fillRect(0, 0, w, h)
   ctx.fillStyle = C.line; ctx.fillRect(0, h - 1, w, 1)
   ctx.save(); ctx.beginPath(); ctx.rect(LABEL_W, 0, w - LABEL_W, h); ctx.clip()
@@ -56,8 +57,9 @@ export function drawRuler(ctx: CanvasRenderingContext2D, sc: TimeScale, w: numbe
     ctx.font = '500 10.5px "IBM Plex Sans KR", sans-serif'
     const t = String(frame), tw = Math.ceil(ctx.measureText(t).width) + 10, th = 14
     const tx = Math.min(Math.max(px - tw / 2, LABEL_W + 1), w - tw - 1)
-    ctx.fillStyle = C.accent; ctx.beginPath(); ctx.roundRect(tx, h - th - 2, tw, th, 3); ctx.fill()
-    ctx.fillStyle = C.bg; ctx.textAlign = 'center'; ctx.fillText(t, tx + tw / 2, h - 2 - th / 2 + 0.5); ctx.textAlign = 'left'
+    ctx.beginPath(); ctx.roundRect(tx + (pinned ? 0.5 : 0), h - th - 2 + (pinned ? 0.5 : 0), tw - (pinned ? 1 : 0), th - (pinned ? 1 : 0), 3)
+    if (pinned) { ctx.fillStyle = C.bg; ctx.fill(); ctx.strokeStyle = C.accent; ctx.lineWidth = 1; ctx.stroke() } else { ctx.fillStyle = C.accent; ctx.fill() }
+    ctx.fillStyle = pinned ? C.accent : C.bg; ctx.textAlign = 'center'; ctx.fillText(t, tx + tw / 2, h - 2 - th / 2 + 0.5); ctx.textAlign = 'left'
     ctx.font = '11px "IBM Plex Sans KR", sans-serif'
   }
   ctx.restore()

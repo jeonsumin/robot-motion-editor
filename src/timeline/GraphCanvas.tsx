@@ -7,7 +7,7 @@ import type { Curve, Key, Sequence } from '../model/types'
 import { evalCurve } from '../model/curve'
 import { fitView, handlePoints, valueToY, velocityViolations, yToValue, type ValueScale } from './graph'
 import { frameToX, hoverFrame, hoverScrub, ROOT_CHANNELS, type TimeScale } from './timeScale'
-import { edgeScroll, followStep, markHover, markUserScroll, resetFollow } from './follow'
+import { edgeScroll, followStep, markHover, markUserScroll, resetFollow, wheelFrames } from './follow'
 import { drawRuler, LABEL_W, RULER_H } from './ruler'
 import { drawPieceBounds, drawRangeBand, minScrollF, startRangeDrag } from './rangeBand'
 import { tv } from './viewState'
@@ -194,7 +194,7 @@ export default function GraphCanvas() {
         drawPieceBounds(ctx, sc, e.item, RULER_H, H, LABEL_W, W, C)
       }
       const sel = e?.actorId ?? ed.getState().sel.actorId, cf = (sel && editTarget(ed.getState(), sel)?.f) || 0
-      drawRuler(ctx, sc, W, RULER_H, NO_SEQ, cf, C, true)
+      drawRuler(ctx, sc, W, RULER_H, NO_SEQ, cf, C, true, ed.getState().playheadPinned)
       { const r = ed.getState().range; if (r) drawRangeBand(ctx, sc, r, 0, H, LABEL_W, W, C.accent) }
       const px = Math.round(frameToX(sc, cf)) + 0.5
       if (px >= LABEL_W) { ctx.fillStyle = C.accent; ctx.fillRect(px - 0.5, 0, 1, H) }
@@ -283,11 +283,12 @@ export default function GraphCanvas() {
       x => { if (edgeDrag) ed.getState().setFrame(seqFrame(x)); else hover.push(seqFrame(x)); schedule() })
     const onMove = (e: MouseEvent) => {
       const x = pos(e).x
-      const f = hoverFrame(x, LABEL_W, scale(), e.buttons !== 0 || ed.getState().playing || !editingItem(ed.getState()))
+      const f = hoverFrame(x, LABEL_W, scale(), e.buttons !== 0 || hoverOff())
       if (f !== null) { hover.push(seqFrame(x)); edge.at(x) } else if (!edgeDrag) edge.stop()
     }
     const onLeave = () => { if (!edgeDrag) edge.stop() }
 
+    const hoverOff = () => { const s = ed.getState(); return s.playing || s.playheadPinned || !editingItem(s) }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       markUserScroll()
@@ -296,7 +297,10 @@ export default function GraphCanvas() {
         tv.ppf = Math.min(Math.max(tv.ppf * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 0.5), 40)
         tv.scrollF = Math.max(minScrollF(), fAt - (x - LABEL_W) / tv.ppf)
       } else if (e.shiftKey) vs = { ...vs, y0: vs.y0 - (e.deltaY || e.deltaX) } // pan values
-      else tv.scrollF = Math.max(minScrollF(), tv.scrollF + (e.deltaY + e.deltaX) / tv.ppf)
+      else { // 휠 = 구간 이동 (user, like the sequence): up = later; the playhead keeps following the pointer unless 고정
+        tv.scrollF = Math.max(minScrollF(), tv.scrollF + wheelFrames(e, tv.ppf))
+        if (hoverFrame(pos(e).x, LABEL_W, scale(), hoverOff()) !== null) hover.push(seqFrame(pos(e).x))
+      }
       schedule()
     }
 

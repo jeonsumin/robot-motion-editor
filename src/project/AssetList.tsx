@@ -22,10 +22,10 @@ function RenameInput({ name, label, onDone }: { name: string; label: string; onD
   )
 }
 
-type Entry = [label: string, run: (() => void) | Entry[]]
+export type Entry = [label: string, run: (() => void) | Entry[]]
 
 // A right-click menu (and its 폴더로 이동 submenu): focus moves in on open; ↑/↓ move, → opens a submenu, Esc/← goes back.
-function MenuList({ label, entries, x, y, close, back }: { label: string; entries: Entry[]; x: number; y: number; close: () => void; back: () => void }) {
+function MenuList({ label, entries, x, y, close, back, head }: { label: string; entries: Entry[]; x: number; y: number; close: () => void; back: () => void; head?: string[] /* dim lines on top, not items */ }) {
   const ref = useRef<HTMLDivElement>(null)
   const [sub, setSub] = useState<{ i: number; x: number; y: number } | null>(null)
   const items = () => [...ref.current!.querySelectorAll<HTMLElement>(':scope > [role=menuitem]')]
@@ -42,6 +42,7 @@ function MenuList({ label, entries, x, y, close, back }: { label: string; entrie
   const s = sub && entries[sub.i]
   return (
     <div ref={ref} role="menu" aria-label={label} className="tl-menu" style={{ left: x, top: y }} onKeyDown={onKey}>
+      {head?.length ? <div className="tl-menu-head" role="presentation">{head.map((h, i) => <div key={i}>{h}</div>)}</div> : null}
       {entries.map(([l, run], i) => Array.isArray(run)
         ? <button key={i} role="menuitem" tabIndex={-1} aria-haspopup="menu" aria-expanded={sub?.i === i} onClick={e => open(i, e.currentTarget)}>{l}<span aria-hidden="true"> ▸</span></button>
         : <button key={i} role="menuitem" tabIndex={-1} onClick={() => { close(); run() }}>{l}</button>)}
@@ -51,14 +52,14 @@ function MenuList({ label, entries, x, y, close, back }: { label: string; entrie
   )
 }
 
-function RowMenu({ x, y, entries, close }: { x: number; y: number; entries: Entry[]; close: (refocus: boolean) => void }) {
+export function RowMenu({ x, y, entries, close, label = '목록', head }: { x: number; y: number; entries: Entry[]; close: (refocus: boolean) => void; label?: string; head?: string[] }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const away = (e: PointerEvent) => { if (!ref.current?.contains(e.target as Node)) close(false) }
     document.addEventListener('pointerdown', away)
     return () => document.removeEventListener('pointerdown', away)
   }, [])
-  return <div ref={ref}><MenuList label="목록" entries={entries} x={x} y={y} close={() => close(false)} back={() => close(true)} /></div>
+  return <div ref={ref}><MenuList label={label} entries={entries} x={x} y={y} close={() => close(false)} back={() => close(true)} head={head} /></div>
 }
 
 /** One tab's list (모션 or 영상): folders, filter, selection, drag (to the timeline or into a folder), rename, right-click menu. */

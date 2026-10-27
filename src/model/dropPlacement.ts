@@ -36,6 +36,20 @@ function insertAt(items: Item[], len: number, f: number): { start: number; shift
   return { start: f, shift: by > 0 ? { ids: later.map(i => i.id), by } : undefined }
 }
 
+/** 펼친 레인에 놓기(사용자): 위치는 놓은 시각이 아니라 그 레인의 조각 기준 — 막대 앞쪽 절반보다 왼쪽이면 그 조각 앞,
+ * 그 밖(레인의 빈 곳 포함)은 그 조각 바로 뒤. insertAt에 넘길 프레임을 돌려줌(끼워 넣기·밀어내기 규칙은 그대로). */
+export function laneDropFrame(it: Item, frame: number): number {
+  return frame < it.start + itemLen(it) / 2 ? it.start : end(it)
+}
+
+/** 끼울 자리 표시(사용자): 앞뒤 조각을 막대에 보이는 이름(`name`, 프로젝트 이름 뺀 조각 이름)으로 "GO2-1 ↔ GO2-2 사이" / "GO2-1 앞" / "GO2-3 뒤".
+ * 넣기 전 기준(화면에 보이는 이름). 빈 트랙이면 ''. */
+export function insertLabel(items: Item[], start: number, shift: { ids: string[] } | undefined, name: (it: Item) => string): string {
+  const moved = new Set(shift?.ids ?? []), s = [...items].sort((a, b) => a.start - b.start)
+  const k = s.filter(i => !moved.has(i.id) && i.start < start).length // pieces that stay in front of the new one
+  return !s.length ? '' : k === 0 ? `${name(s[0])} 앞` : k === s.length ? `${name(s[k - 1])} 뒤` : `${name(s[k - 1])} ↔ ${name(s[k])} 사이`
+}
+
 /** Where a dragged asset lands for a drop at `frame` over the track `rowTrackId` (null = not over a track row). Pure; used by the ghost and the drop. */
 export function dropPlacement(p: Project, asset: Asset, rowTrackId: string | null, frame: number): Placement {
   const f = Math.max(0, Math.round(frame))

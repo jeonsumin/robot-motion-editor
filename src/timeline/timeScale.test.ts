@@ -55,3 +55,13 @@ test('hoverFrame: null in the label column or when busy, else the frame under x'
   expect(hoverFrame(200, 100, sc, true)).toBe(null)
   expect(hoverFrame(200, 100, sc, false)).toBe(50)
 })
+
+test('parseTimecode: a bare number is a frame; m:ss.ff like the display (ff = frames 0-59, missing = 0); else null', async () => {
+  const { parseTimecode, formatTimecode } = await import('./timeScale')
+  expect(parseTimecode('11192')).toBe(11192)
+  expect(parseTimecode(' 02:25.43 ')).toBe((2 * 60 + 25) * 60 + 43)
+  expect(parseTimecode('2:25')).toBe((2 * 60 + 25) * 60)
+  expect(parseTimecode('0:01.4')).toBe(64)
+  expect(parseTimecode(formatTimecode(8743))).toBe(8743) // round trip with the display
+  for (const bad of ['', 'abc', '1:60', '1:00.60', '1.5', '-3', '1:2:3']) expect(parseTimecode(bad)).toBeNull()
+})

@@ -7,10 +7,10 @@ import { SEAM_MAX } from '../model/seam'
 import type { Item, Track } from '../model/types'
 import { itemSeam, offsetKeyCount } from '../model/itemClip'
 import { seqFlash, seqFocus, tv } from './viewState'
-import { edgeScroll, followStep, markHover, markUserScroll, resetFollow } from './follow'
+import { edgeScroll, followStep, markHover, markUserScroll, resetFollow, wheelFrames } from './follow'
 import { sequenceEnd } from '../transport'
 import { drawRuler, hitMarker, LABEL_W, RULER_H } from './ruler'
-import { dropPlacement } from '../model/dropPlacement'
+import { dropPlacement, insertLabel, laneDropFrame } from '../model/dropPlacement'
 import { COLOR } from '../model/defaults'
 import { draggedAsset, draggedClips, dropAsset, dropClips, isAssetDrag } from './assetDrop'
 import { mediaUrl, subscribeMedia } from '../media/registry'
@@ -93,6 +93,7 @@ export default function SequenceCanvas() {
   const [msg, setMsg] = useState<Msg | null>(null)
   const [rename, setRename] = useState<Rename | null>(null)
   const [ctx, setCtx] = useState<Ctx | null>(null)
+  const [ph, setPh] = useState<{ x: number; y: number } | null>(null) // 재생헤드 고정 menu (ruler / empty space right-click)
   const menuRef = useRef<HTMLDivElement>(null)
   const cancel = useRef(false)
   const renaming = useRef(false)
@@ -116,7 +117,7 @@ export default function SequenceCanvas() {
     const css = getComputedStyle(document.documentElement)
     const col = (n: string) => css.getPropertyValue(n).trim()
     const C = { bg: col('--bg'), panel: col('--panel'), line: col('--line'), text: col('--text'), accent: col('--accent'), rest: col('--rest'), piece: col('--piece'), inertia: col('--inertia'), blend: col('--blend') }
-    let W = 0, H = 0, raf = 0, drag: Drag | null = null, ghost: { y: number; start: number; len: number; color: string } | null = null, timer = 0, scrollY = 0, scrollTo = 0 // rows: shown offset, and where the wheel is easing it to
+    let W = 0, H = 0, raf = 0, drag: Drag | null = null, ghost: { y: number; start: number; len: number; color: string; line?: number /* 레인 사이 삽입선 y */; label?: string /* 끼울 자리 "GO2-1 ↔ GO2-2 사이" */ } | null = null, timer = 0, scrollY = 0, scrollTo = 0 // rows: shown offset, and where the wheel is easing it to
     let sbHover = false, sbDrag = false, mmHover: MmHit | null = null, mmDragging = false
 
     const scale = (): TimeScale => ({ x0: LABEL_W - tv.scrollF * tv.ppf, pxPerFrame: tv.ppf })
@@ -319,9 +320,18 @@ export default function SequenceCanvas() {
         const gx = frameToX(sc, ghost.start), gw = ghost.len * tv.ppf
         ctx.globalAlpha = 0.3; ctx.fillStyle = ghost.color; ctx.fillRect(gx, ghost.y + 2, gw, ROW_H - 5)
         ctx.globalAlpha = 1; ctx.strokeStyle = ghost.color; ctx.strokeRect(gx + 0.5, ghost.y + 2.5, gw - 1, ROW_H - 6)
+        if (ghost.line !== undefined) { ctx.fillStyle = C.accent; ctx.fillRect(LABEL_W, ghost.line - 1, W - LABEL_W, 2) } // 레인 기준 드롭: 들어갈 순서
+        if (ghost.label) { // 끼울 자리 번호: 고스트 오른쪽(넘치면 왼쪽)에 작은 글자
+          ctx.font = '10px "IBM Plex Sans KR", sans-serif'
+          const tw = ctx.measureText(ghost.label).width + 8, cy = ghost.y + ROW_H / 2
+          const lx = Math.min(W - tw, Math.max(LABEL_W, gx + gw + 4 + tw <= W ? gx + gw + 4 : gx - 4 - tw)) // ghost off-screen: the label stays at the edge
+          ctx.fillStyle = C.bg; ctx.fillRect(lx, cy - 8, tw, 15)
+          ctx.fillStyle = DIM; ctx.fillText(ghost.label, lx + 4, cy)
+          ctx.font = '11px "IBM Plex Sans KR", sans-serif'
+        }
         ctx.restore()
       }
-      drawRuler(ctx, sc, W, RULER_H, s.project.sequence, s.frame, C, true)
+      drawRuler(ctx, sc, W, RULER_H, s.project.sequence, s.frame, C, true, s.playheadPinned)
       const px = Math.round(frameToX(sc, s.frame)) + 0.5
       if (s.spanPreview) { // the 구간 프리뷰's span, over the ruler and the rows
         const a = Math.max(frameToX(sc, s.spanPreview[0]), LABEL_W), b = frameToX(sc, s.spanPreview[1])
@@ -550,13 +560,15 @@ export default function SequenceCanvas() {
         const r = layout()[rowAt(y)]
         if (r && !r.it && x < LABEL_W && r.t.actorId && !isVideo(r.t)) { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, actorId: r.t.actorId, trackId: r.t.id, itemId: null }); return }
         const hit = r?.it ? { t: r.t, it: r.it } : itemAt(x, y)
-        if (hit && hit.t.actorId && !isVideo(hit.t)) { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, actorId: hit.t.actorId, trackId: hit.t.id, itemId: hit.it.id }) }
+        if (hit && hit.t.actorId && !isVideo(hit.t)) { e.preventDefault(); setCtx({ x: e.clientX, y: e.clientY, actorId: hit.t.actorId, trackId: hit.t.id, itemId: hit.it.id }); return }
+        if (hit || x < LABEL_W || y >= H - MM_H || (x >= W - SB_W && !!sbar())) return // a video bar, a label, the minimap or scrollbar: no menu
+        e.preventDefault(); setPh({ x: e.clientX, y: e.clientY }) // empty space: 재생헤드 고정 menu (user)
         return
       }
       e.preventDefault()
       const mi = hitMarker(s.project.sequence, scale(), x)
       if (mi !== null) s.deleteMarker(mi)
-      else if (s.spanPreview) s.setSpanPreview(null) // ruler right-click: the 구간 프리뷰 closes
+      else if (x >= LABEL_W) setPh({ x: e.clientX, y: e.clientY }) // ruler: 재생헤드 고정 / 고정 해제 (+ 구간 프리뷰 닫기 when it is open)
     }
 
     const hover = hoverScrub(() => ed.getState().frame, f => { markHover(); ed.getState().setFrame(f) })
@@ -580,9 +592,11 @@ export default function SequenceCanvas() {
         : !isVideo(r.t) && near(TRAIL_X) ? '경로 표시: 이 로봇의 골반이 지나간 바닥 경로를 메인 화면에 선으로 보여 줍니다'
         : near(EYE_X) ? '숨기기' : near(LOCK_X) ? '잠그기' : ''
       if (canvas.title !== tip) canvas.title = tip
-      const f = hoverFrame(x, LABEL_W, scale(), e.buttons !== 0 || ed.getState().playing || renaming.current)
+      const f = hoverFrame(x, LABEL_W, scale(), e.buttons !== 0 || hoverOff())
       if (f !== null) { hover.push(Math.max(0, f)); edge.at(x) } else if (!edgeDrag) edge.stop()
     }
+    // the playhead follows the pointer unless playing, renaming a marker or 재생헤드 고정 (user)
+    const hoverOff = () => { const s = ed.getState(); return s.playing || s.playheadPinned || renaming.current }
 
     // full text of a lane label (hover): piece, time range, clip, 기본자세, physics
     const laneTip = (t: Track, it: Item) => {
@@ -594,32 +608,48 @@ export default function SequenceCanvas() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       markUserScroll()
+      const { x, y } = pos(e)
       if (e.ctrlKey) {
-        const { x } = pos(e), fAt = tv.scrollF + (x - LABEL_W) / tv.ppf
+        const fAt = tv.scrollF + (x - LABEL_W) / tv.ppf
         tv.ppf = Math.min(Math.max(tv.ppf * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 0.5), 40)
         tv.scrollF = Math.max(0, fAt - (x - LABEL_W) / tv.ppf)
-      } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) { // time: Shift + wheel, or a sideways trackpad swipe
-        tv.scrollF = Math.max(0, tv.scrollF + (e.shiftKey ? e.deltaY || e.deltaX : e.deltaX) / tv.ppf)
-      } else scrollTo = Math.min(Math.max(scrollTo + (e.deltaMode === 1 ? e.deltaY * ROW_H : e.deltaY), 0), maxScroll()) // plain wheel: rows only, eased in draw (nothing moves when they fit)
+      } else if (e.shiftKey || x < LABEL_W || (x >= W - SB_W && y >= RULER_H && !!sbar())) { // rows: Shift + wheel, or over the labels / scrollbar; eased in draw (nothing moves when they fit)
+        const d = e.shiftKey ? e.deltaY || e.deltaX : e.deltaY
+        scrollTo = Math.min(Math.max(scrollTo + (e.deltaMode === 1 ? d * ROW_H : d), 0), maxScroll())
+      } else { // 휠 = 구간 이동 (user): up = later, down = earlier; the playhead keeps following the pointer unless 고정
+        tv.scrollF = Math.max(0, tv.scrollF + wheelFrames(e, tv.ppf))
+        const f = y < H - MM_H ? hoverFrame(x, LABEL_W, scale(), hoverOff()) : null
+        if (f !== null) hover.push(Math.max(0, f))
+      }
       schedule()
     }
 
     // ---- asset drag from the project panel: the ghost bar and the drop use the same dropPlacement ----
     const setGhost = (g: typeof ghost) => { ghost = g; schedule() }
-    const dropAt = (e: DragEvent) => { const { x, y } = pos(e); return { row: layout()[rowAt(y)], frame: frameAt(x) } } // a child row drops onto its track
+    // a child row drops onto its track; a piece lane decides by its piece (front half = before it, else right after it), not by the frame
+    const dropAt = (e: DragEvent) => {
+      const { x, y } = pos(e), row = layout()[rowAt(y)], frame = row?.it ? laneDropFrame(row.it, frameAt(x)) : frameAt(x)
+      return { row, frame, front: !!row?.it && frame === row.it.start }
+    }
     const onDragOver = (e: DragEvent) => {
       if (!isAssetDrag(e.dataTransfer ?? null)) return
       e.preventDefault()
       const asset = draggedAsset(null)
       if (!asset) return
-      const { row, frame } = dropAt(e), p = ed.getState().project, pl = dropPlacement(p, asset, row?.t.id ?? null, frame)
+      const { row, frame, front } = dropAt(e), p = ed.getState().project, pl = dropPlacement(p, asset, row?.t.id ?? null, frame)
       if (pl.kind === 'reject') return setGhost(null)
       const rows = layout(), last = rows.at(-1), bottom = last ? last.y + last.h : RULER_H - scrollY
       if (pl.kind === 'newActor') setGhost({ y: bottom, start: pl.start, len: (asset.clip ?? p.clips[asset.id]).length, color: COLOR[pl.robot] })
       else {
-        const t = pl.kind === 'video' ? rows.find(r => !r.it && isVideo(r.t)) : rows.find(r => !r.it && r.t.id === pl.trackId)
+        const lane = pl.kind === 'existing' && row?.it && row.t.id === pl.trackId ? row : undefined // over a piece lane: the ghost sits on it
+        const t = lane ?? (pl.kind === 'video' ? rows.find(r => !r.it && isVideo(r.t)) : rows.find(r => !r.it && r.t.id === pl.trackId))
         const actor = p.actors.find(a => a.id === t?.t.actorId)
-        setGhost(t ? { y: t.y, start: pl.start, len: asset.kind === 'clip' ? (asset.clip ?? p.clips[asset.id]).length : p.media.find(m => m.id === asset.id)!.durationF, color: actor?.color ?? C.accent } : null)
+        setGhost(t ? { y: t.y, start: pl.start, len: asset.kind === 'clip' ? (asset.clip ?? p.clips[asset.id]).length : p.media.find(m => m.id === asset.id)!.durationF, color: actor?.color ?? C.accent,
+          line: lane ? (front ? lane.y : lane.y + ROW_H) : undefined,
+          label: pl.kind === 'existing' ? insertLabel(t.t.items, pl.start, pl.shift, it => { // the bar's name without the project prefix
+            const pt = projectTitle(ed.getState().fileName), n = pieceName(t.t, it, p.clips[it.refId], pt)
+            return n.startsWith(pt + '-') ? n.slice(pt.length + 1) : n
+          }) : undefined } : null)
       }
     }
     const onDrop = (e: DragEvent) => {
@@ -667,19 +697,31 @@ export default function SequenceCanvas() {
     }
     setRename(null)
   }
-  const closeCtx = (refocus: boolean) => { setCtx(null); if (refocus) cv.current?.focus() }
+  const closeCtx = (refocus: boolean) => { setCtx(null); setPh(null); if (refocus) cv.current?.focus() }
   useEffect(() => {
-    if (!ctx) return
+    if (!ctx && !ph) return
     menuRef.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus()
-    const away = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) setCtx(null) }
+    const away = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) { setCtx(null); setPh(null) } }
     document.addEventListener('pointerdown', away); document.addEventListener('wheel', away, true); document.addEventListener('scroll', away, true)
     return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('wheel', away, true); document.removeEventListener('scroll', away, true) }
-  }, [ctx])
+  }, [ctx, ph])
   const runExport = async (c: Ctx) => {
     const st = getEditor().getState(), m = await exportOne(st.project, st.defs, c.actorId, c.itemId!, undefined, projectTitle(st.fileName))
     if (m) seqFlash.fn?.(m, c.itemId!)
   }
   const project = useEditor(s => s.project), byItem = usePhysics(s => s.byItem)
+  const pinned = useEditor(s => s.playheadPinned), spanOpen = useEditor(s => !!s.spanPreview)
+  // 재생헤드 고정 (user): only the pointer-follow stops; clicks on the ruler, the arrow keys and playback still move it
+  const pinItem = <button role="menuitem" tabIndex={-1} title={pinned ? '재생헤드가 다시 마우스를 따라갑니다' : '마우스를 움직여도 재생헤드가 이 프레임에 머뭅니다'}
+    onClick={() => { closeCtx(true); getEditor().getState().setPlayheadPinned(!pinned) }}>{pinned ? '고정 해제' : '재생헤드 고정'}</button>
+  const menuKeys = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCtx(true) } else if (e.key === 'Tab') closeCtx(true)
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const its = [...menuRef.current!.querySelectorAll<HTMLElement>('[role=menuitem]')], i = its.indexOf(document.activeElement as HTMLElement)
+      its[(i + (e.key === 'ArrowDown' ? 1 : its.length - 1)) % its.length]?.focus()
+    }
+  }
   // a robot is known to have no physics model once one of its items came back 미지원
   const robotOf = (actorId?: string) => project.actors.find(a => a.id === actorId)?.robot
   const noModel = !!ctx && project.sequence.tracks.some(t => robotOf(t.actorId) === robotOf(ctx.actorId) && t.items.some(i => byItem[i.id]?.message === '미지원'))
@@ -718,20 +760,19 @@ export default function SequenceCanvas() {
       </div>
       {!rows.length && <div className="seq-empty">CSV 가져오기로 모션을 불러오세요</div>}
       {ctx && (
-        <div ref={menuRef} role="menu" aria-label="클립" className="tl-menu" style={{ left: ctx.x, top: ctx.y }}
-          onKeyDown={e => {
-            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCtx(true) } else if (e.key === 'Tab') closeCtx(true)
-            else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-              e.preventDefault()
-              const its = [...menuRef.current!.querySelectorAll<HTMLElement>('[role=menuitem]')], i = its.indexOf(document.activeElement as HTMLElement)
-              its[(i + (e.key === 'ArrowDown' ? 1 : its.length - 1)) % its.length]?.focus()
-            }
-          }}>
+        <div ref={menuRef} role="menu" aria-label="클립" className="tl-menu" style={{ left: ctx.x, top: ctx.y }} onKeyDown={menuKeys}>
           {ctx.itemId && <button role="menuitem" tabIndex={-1} onClick={() => { closeCtx(false); void runExport(ctx) }}>export하기</button>}
           {ctxItem && hasEdit(ctxItem) && <button role="menuitem" tabIndex={-1} title="이 조각의 수정을 모두 지우고 원본 클립대로 되돌립니다"
             onClick={() => { closeCtx(false); if (!getEditor().getState().clearOffset(ctxItem.id)) seqFlash.fn?.(LOCKED, ctxItem.id) }}>수정 지우기</button>}
           <button role="menuitem" tabIndex={-1} aria-disabled={noModel} title={noModel ? '미지원' : undefined}
             onClick={() => { if (noModel) return; closeCtx(false); runPhys(ctx) }}>{ctx.itemId ? '물리 검증' : '트랙 물리 검증'}</button>
+          {pinItem}
+        </div>
+      )}
+      {ph && !ctx && (
+        <div ref={menuRef} role="menu" aria-label="재생헤드" className="tl-menu" style={{ left: ph.x, top: ph.y }} onKeyDown={menuKeys}>
+          {pinItem}
+          {spanOpen && <button role="menuitem" tabIndex={-1} onClick={() => { closeCtx(true); getEditor().getState().setSpanPreview(null) }}>구간 프리뷰 닫기</button>}
         </div>
       )}
       {msg && <div className="seq-msg" style={{ left: msg.left, top: msg.top }}>{msg.text}</div>}
