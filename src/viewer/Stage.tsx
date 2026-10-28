@@ -11,7 +11,7 @@ import { baseClip, editedClip, offsetKeyCount, withUse } from '../model/itemClip
 import { nearestAngle, quatYaw } from '../model/rootMath'
 import { hiddenAt, itemLen, resolve, sortedItems, stitchTransforms, worldToClipRoot } from '../model/sequence'
 import type { Actor, Clip, Project } from '../model/types'
-import { actorOf, CLIP_ACTOR, clipLocked, editingItem, editTarget, getEditor, gizmoLock, targetItem, trackLocked, useEditor } from '../store/store'
+import { actorOf, BLOCK_PREVIEW_ID, CLIP_ACTOR, clipLocked, editingItem, editTarget, getEditor, gizmoLock, targetItem, trackLocked, useEditor } from '../store/store'
 import { sequenceEnd } from '../transport'
 import { cancelDrag, trackDrag } from '../timeline/drag'
 import { loadTemplate } from '../go2blocks/Go2BlockPanel'
@@ -253,7 +253,8 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
 
     // the clip a compare pane shows: the original, or (item preview) the piece's clip with its 수정 층 and rest-pose bake
     const shownClip = () => {
-      const { defs } = store.getState(), project = paneProject(), clip = cid ? project.clips[cid] : undefined
+      const { defs, blockPreview } = store.getState(), project = paneProject()
+      const clip = !cid ? undefined : cid === BLOCK_PREVIEW_ID ? blockPreview?.clip : project.clips[cid] // 라이브러리 미리보기: a clip outside the project
       if (!clip || !ranged || !itemId) return clip
       const it = project.sequence.tracks.flatMap(t => t.items).find(i => i.id === itemId)
       const base = (it && tailedClip(project, defs, it)) || clip // with its 끝 기본자세 after trimOut
@@ -609,7 +610,7 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
     const unsub = store.subscribe((s, prev) => {
       if (s.project !== prev.project) syncStage()
       if (cid) {
-        if (s.project !== prev.project) { syncClip(); shownF = -1 }
+        if (s.project !== prev.project || (cid === BLOCK_PREVIEW_ID && s.blockPreview !== prev.blockPreview)) { syncClip(); shownF = -1 }
         applyClip()
         if (editPane) { const lk = locked(); if (s.sel !== prev.sel || lk !== wasLocked) syncSelection(); wasLocked = lk }
         return

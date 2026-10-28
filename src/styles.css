@@ -65,6 +65,7 @@ body {
   background: var(--panel); border-bottom: 1px solid var(--line); color: var(--text); font-size: 12px; user-select: none; -webkit-user-select: none; cursor: grab; touch-action: none; }
 .pane-title button, .ov-close { background: transparent; color: var(--text); border: 0; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px; }
 .pane-title button:hover, .ov-close:hover { color: var(--accent); }
+.pane-title .pane-act { margin-left: auto; margin-right: 4px; border: 1px solid var(--line); border-radius: 3px; padding: 2px 7px; }
 .pane-sep { flex: 0 0 6px; background: var(--line); touch-action: none; }
 .panes.left .pane-sep, .panes.right .pane-sep { cursor: col-resize; }
 .panes.top .pane-sep, .panes.bottom .pane-sep { cursor: row-resize; }

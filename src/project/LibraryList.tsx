@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import Go2BlockPanel, { addBlock, blockAsset, cachedTemplate, loadTemplate, stepOptions, type AddTarget } from '../go2blocks/Go2BlockPanel'
+import Go2BlockPanel, { addBlock, blockAsset, cachedTemplate, loadTemplate, previewClip, stepOptions, type AddTarget } from '../go2blocks/Go2BlockPanel'
 import { GO2_BLOCKS, GO2_FOLDERS, type Block } from '../go2blocks/blocks'
 import { buildBlockClip, emptyClipFor } from '../go2blocks/build'
 import { getEditor, trackLocked, useEditor } from '../store/store'
@@ -78,8 +78,25 @@ export default function LibraryList({ query }: { query: string }) {
       else setMsg(r.reused ? `이미 목록에 있습니다: ${r.name} (새로 만들지 않음)` : `목록에 추가했습니다: ${r.name}`)
     } catch (e) { setMsg(`템플릿을 불러오지 못했습니다: ${e instanceof Error ? e.message : e}`) }
   }
-  // 로봇마다 이름 한 줄 → 맨 앞 / 맨 뒤 (사용자)
+  // 라이브러리 미리보기 (user): the block at the value it would add, in its own looping pane; nothing goes into the project
+  const showPreview = async (b: Block) => {
+    try {
+      const tp = b.kind === 'empty' ? undefined : await loadTemplate(b.id)
+      const o = b.kind === 'loop' ? stepOf(b) ?? stepOptions(b, tp!.poses)[0] : undefined
+      const clip = previewClip(b, tp, o ? Number(o.v) : 0)
+      if (clip) getEditor().getState().setBlockPreview({ blockId: b.id, value: o?.v ?? '', clip })
+    } catch (e) { setMsg(`템플릿을 불러오지 못했습니다: ${e instanceof Error ? e.message : e}`) }
+  }
+  // the previewed block's value changed in the 설정 칸: the pane follows
+  const bp = useEditor(s => s.blockPreview)
+  useEffect(() => {
+    const b = bp && GO2_BLOCKS.find(x => x.id === bp.blockId)
+    if (b?.kind === 'loop' && values[b.id] !== undefined && values[b.id] !== bp!.value) void showPreview(b)
+  }, [values]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 미리보기, then 로봇마다 이름 한 줄 → 맨 앞 / 맨 뒤 (사용자)
   const menuEntries = (b: Block): MenuEntry[] => [
+    ['미리보기', () => { void showPreview(b) }],
     ...go2s.map(a => [a.name, [['맨 앞에 추가', () => { runAdd(b, a.id, true) }], ['맨 뒤에 추가', () => { runAdd(b, a.id) }]]] as MenuEntry),
     ['새 GO2 로봇으로 추가', () => { runAdd(b, null) }],
     ['목록에만 추가', () => { runAdd(b, 'asset') }],

@@ -12,6 +12,11 @@ import { addOverRange, type Range } from '../model/rangeEdit'
 import { BLEND_RANGE, HOLD_RANGE, INERTIA_CAP, previewRange } from '../model/restPose'
 import { SEAM_MAX } from '../model/seam'
 import type { RobotDef, RobotKind } from '../robot/types'
+
+/** 라이브러리 미리보기 창의 클립 id (프로젝트에 넣지 않는 임시 클립). */
+export const BLOCK_PREVIEW_ID = 'library-preview'
+/** 라이브러리 미리보기: 어떤 블록(blockId)을 어떤 값(value, 값 블록만)으로 만든 클립인지. */
+export interface BlockPreview { blockId: string; value: string; clip: Clip }
 import type { PhysicsSettings } from '../physics/settings'
 
 // Bumped whenever a different project is loaded; async work started against one project checks it before landing.
@@ -47,6 +52,15 @@ export interface EditorState {
   /** 배치 이동 toggle (editor state, not saved): on = the playhead sits at the selected GO2's track end - 1. */
   walkMode: boolean; setWalkMode(on: boolean): void
   playheadPinned: boolean; setPlayheadPinned(on: boolean): void // 재생헤드 고정(사용자): 마우스 따라가기만 끔, 화면 전용·저장 안 함
+  /** 라이브러리 미리보기(사용자): 프로젝트 밖의 블록 클립 하나를 자기 창에서 반복 재생. 목록·타임라인·저장·실행취소와 무관.
+   * clip.id = BLOCK_PREVIEW_ID(프로젝트 클립과 겹치지 않음). 확장: 이 clip에 수정 층(Clip.offset)을 얹어 미세 수정 후 목록에 넣을 수 있게. */
+  blockPreview: BlockPreview | null; setBlockPreview(p: BlockPreview | null): void
+  /** 고쳐서 추가(사용자): 미리보기 중인 블록을 `<이름>_수정` 새 클립으로 목록에 넣고 클립 편집 모드로 엶(미리보기 창은 닫음). 넣은 이름, 실패 = null. */
+  editPreviewAsClip(): string | null
+  /** 고쳐서 추가로 연 클립 편집이면 그 클립 id(편집 바의 `추가 취소`용). 편집을 나가거나 클립이 사라지면 null. 저장 안 함. */
+  clipEditDraft: string | null
+  /** 추가 취소: 고쳐서 추가로 넣은 클립을 목록에서 빼고 클립 편집을 나감(실행취소로 되돌릴 수 있음). */
+  cancelDraftClip(): void
   openComparePane(clipId: string): void; closeComparePane(clipId: string): void
   itemPreview: string | null // item id looping in the clip preview pane: not undoable, not saved, pruned when the item goes away
   /** The clip preview's own playhead (sequence frames, from the piece's lead-in start; independent of `frame`, user) and whether it
@@ -330,7 +344,7 @@ export function createEditorStore(defs: RobotDefs, initial: Project = newProject
     // the open clip edit stays while its clip exists; otherwise the fields that close it (playhead and layer restored)
     const keepClipEdit = (p: Project): Partial<EditorState> => {
       const s = get()
-      return !s.clipEdit || p.clips[s.clipEdit] ? {} : { clipEdit: null, clipEditReturn: null, frame: s.clipEditReturn?.frame ?? 0, layer: s.clipEditReturn?.layer ?? 'piece', playing: false, sel: { actorId: null, channel: null, keys: [] } }
+      return !s.clipEdit || p.clips[s.clipEdit] ? {} : { clipEdit: null, clipEditDraft: null, clipEditReturn: null, frame: s.clipEditReturn?.frame ?? 0, layer: s.clipEditReturn?.layer ?? 'piece', playing: false, sel: { actorId: null, channel: null, keys: [] } }
     }
     const keepPanes = (p: Project) => {
       const c = get().comparePanes, k = c.filter(id => id in p.clips)
@@ -534,7 +548,7 @@ export function createEditorStore(defs: RobotDefs, initial: Project = newProject
         const ret = s.clipEditReturn ?? { frame: s.frame, layer: s.layer }
         set({ clipEdit: clipId, clipEditReturn: ret, frame: 0, playing: false, editing: null, layer: 'asset', selItem: null, sel: { actorId: CLIP_ACTOR, channel: null, keys: [] }, range: null })
       },
-      closeClipEdit: () => set(s => s.clipEdit ? { clipEdit: null, clipEditReturn: null, range: null, frame: s.clipEditReturn?.frame ?? 0, layer: s.clipEditReturn?.layer ?? 'piece', playing: false, sel: { actorId: null, channel: null, keys: [] } } : s),
+      closeClipEdit: () => set(s => s.clipEdit ? { clipEdit: null, clipEditDraft: null, clipEditReturn: null, range: null, frame: s.clipEditReturn?.frame ?? 0, layer: s.clipEditReturn?.layer ?? 'piece', playing: false, sel: { actorId: null, channel: null, keys: [] } } : s),
       clearOffset: itemId => tryEdit(p => {
         const f = findItem(p, itemId)
         if (!f || f.t.locked || !f.it.offset) return false
@@ -556,6 +570,26 @@ export function createEditorStore(defs: RobotDefs, initial: Project = newProject
       openComparePane: id => set(s => s.comparePanes.includes(id) || !s.project.clips[id] ? s : { comparePanes: [...s.comparePanes, id].slice(-2) }),
       closeComparePane: id => set(s => ({ comparePanes: s.comparePanes.filter(x => x !== id) })),
       playheadPinned: false,
+      blockPreview: null,
+      setBlockPreview: p => set({ blockPreview: p }),
+      clipEditDraft: null,
+      editPreviewAsClip: () => {
+        const bp = get().blockPreview
+        if (!bp) return null
+        const id = crypto.randomUUID(), name = get().addClipAsset({ ...bp.clip, id, name: `${bp.clip.name}_수정` }) // _수정_2… when taken
+        if (!name) return null
+        set({ blockPreview: null })
+        get().openClipEdit(id)
+        set({ clipEditDraft: get().clipEdit === id ? id : null })
+        return name
+      },
+      cancelDraftClip: () => {
+        const id = get().clipEditDraft
+        if (!id) return
+        get().closeClipEdit()
+        get().deleteClip(id)
+        set({ clipEditDraft: null })
+      },
       setPlayheadPinned: on => set({ playheadPinned: on }),
       walkMode: false,
       setWalkMode: on => {
@@ -983,7 +1017,7 @@ export function createEditorStore(defs: RobotDefs, initial: Project = newProject
       loadProject: (project, fileName) => {
         generation++
         undoS = []; redoS = []; gesture = false; gestureMoved = false; suspended = false
-        set({ project: freezeClips(project), fileName, dirty: false, frame: 0, playing: false, editing: null, selItem: null, sel: { actorId: null, channel: null, keys: [] }, comparePanes: [], spanPreview: null, itemPreview: null, clipEdit: null, clipEditReturn: null, range: null, layer: get().clipEditReturn?.layer ?? get().layer })
+        set({ project: freezeClips(project), fileName, dirty: false, frame: 0, playing: false, editing: null, selItem: null, sel: { actorId: null, channel: null, keys: [] }, comparePanes: [], blockPreview: null, spanPreview: null, itemPreview: null, clipEdit: null, clipEditDraft: null, clipEditReturn: null, range: null, layer: get().clipEditReturn?.layer ?? get().layer })
       },
       markSaved: fileName => set({ fileName, dirty: false }),
       newProjectFile: () => get().loadProject(emptyProject(), null),

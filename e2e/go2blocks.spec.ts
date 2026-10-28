@@ -258,3 +258,77 @@ test('우클릭 메뉴: 위치만 고름 — 로봇 ▸ 맨 앞 / 맨 뒤, 목�
   await expect(page.getByText(/목록에 추가했습니다: Hello/)).toBeVisible()
   expect((await trackItems(page, id)).length).toBe(n0 + 3)
 })
+
+test('라이브러리 미리보기: 우클릭 ▸ 미리보기 → own looping pane; nothing enters the project; follows the 설정 칸 value; ✕ closes', async ({ page }) => {
+  await boot(page)
+  await addGo2(page)
+  await library(page)
+  const p0 = await page.evaluate(() => { const w = window as any; w.__p0 = w.__editor.getState().project; return w.__editor.getState().dirty })
+  const menu = page.getByRole('menu', { name: '라이브러리' }), pane = page.getByRole('region', { name: '라이브러리 미리보기' })
+
+  await row(page, 'Stretch').click({ button: 'right' })
+  await expect(menu.getByRole('menuitem').first()).toHaveText('미리보기')
+  await menu.getByRole('menuitem', { name: '미리보기' }).click()
+  await expect(pane).toContainText('라이브러리 미리보기 · Stretch')
+  const pose = () => page.evaluate(() => { const h = (window as any).__stages?.['library-preview']
+    return h ? Object.values(([...h.entries().values()][0] as any).rig.jointPivots).map((p: any) => p.quaternion.toArray().join()).join('|') : '' })
+  await expect.poll(pose).not.toBe('')
+  const a = await pose()
+  await expect.poll(pose).not.toBe(a) // it plays on its own loop (the sequence is stopped)
+  expect(await page.evaluate(() => (window as any).__editor.getState().playing)).toBe(false)
+
+  // a loop block: the value the 설정 칸 holds, and the pane follows a new value
+  await row(page, 'Rotate').click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: '미리보기' }).click()
+  await expect(pane).toContainText(/라이브러리 미리보기 · Rotate_\d+deg/)
+  const n1 = await pane.locator('.pane-title span').textContent()
+  await page.getByRole('button', { name: '값' }).click()
+  await page.getByRole('option', { name: /\(2걸음\)/ }).first().click()
+  await expect.poll(() => pane.locator('.pane-title span').textContent()).not.toBe(n1)
+
+  // nothing went into the project
+  expect(await page.evaluate(([d0]) => { const s = (window as any).__editor.getState(); return s.project === (window as any).__p0 && s.dirty === d0 }, [p0])).toBe(true)
+  await pane.getByRole('button', { name: '라이브러리 미리보기 닫기' }).click()
+  await expect(pane).toHaveCount(0)
+  expect(await page.evaluate(() => (window as any).__editor.getState().blockPreview)).toBeNull()
+})
+
+test('고쳐서 추가: the previewed block goes into 목록 as <name>_수정 and opens in 클립 편집; 추가 취소 takes it out again', async ({ page }) => {
+  await boot(page)
+  await addGo2(page)
+  await library(page)
+  const pane = page.getByRole('region', { name: '라이브러리 미리보기' })
+  await row(page, 'Hello').click({ button: 'right' })
+  await page.getByRole('menu', { name: '라이브러리' }).getByRole('menuitem', { name: '미리보기' }).click()
+  await expect(pane).toContainText('라이브러리 미리보기 · Hello')
+  const n0 = await clipCount(page)
+
+  await pane.getByRole('button', { name: '고쳐서 추가' }).click()
+  await expect(pane).toHaveCount(0) // the preview closes: editing moves to the main view
+  const edit = page.getByRole('group', { name: '클립 편집' })
+  await expect(edit).toContainText('Hello_수정')
+  const s1 = await page.evaluate(() => { const s = (window as any).__editor.getState(), c = s.project.clips[s.clipEdit]; return { name: c?.name, robot: c?.robot, draft: s.clipEditDraft === s.clipEdit, tracks: s.project.sequence.tracks.map((t: any) => t.items.length) } })
+  expect(s1).toMatchObject({ name: 'Hello_수정', robot: 'go2', draft: true })
+  expect(await clipCount(page)).toBe(n0 + 1)
+
+  // a second one takes the next free name
+  await edit.getByRole('button', { name: '시퀀스로' }).click()
+  await row(page, 'Hello').click({ button: 'right' })
+  await page.getByRole('menu', { name: '라이브러리' }).getByRole('menuitem', { name: '미리보기' }).click()
+  await pane.getByRole('button', { name: '고쳐서 추가' }).click()
+  await expect(edit).toContainText('Hello_수정_2')
+  expect(await clipCount(page)).toBe(n0 + 2)
+
+  // 추가 취소: out of 목록 and out of 클립 편집; the first one (left with 시퀀스로) stays
+  await edit.getByRole('button', { name: '추가 취소' }).click()
+  await expect(edit).toHaveCount(0)
+  expect(await clipCount(page)).toBe(n0 + 1)
+  const names = await page.evaluate(() => Object.values((window as any).__editor.getState().project.clips).map((c: any) => c.name))
+  expect(names).toContain('Hello_수정')
+  expect(names).not.toContain('Hello_수정_2')
+  // a clip opened the usual way (목록 double-click) has no 추가 취소
+  await page.getByRole('tab', { name: '모션(CSV)' }).click()
+  await page.locator('.pp-row[data-kind=clip]', { hasText: 'Hello_수정' }).first().dblclick()
+  await expect(edit).toBeVisible()
+  await expect(edit.getByRole('button', { name: '추가 취소' })).toHaveCount(0)
+})

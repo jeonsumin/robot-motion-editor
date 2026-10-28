@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseCsvPoses } from '../export/importCsv'
 import type { Pose } from '../model/pose'
 import type { Clip } from '../model/types'
-import { getEditor, trackLocked, useEditor } from '../store/store'
+import { BLOCK_PREVIEW_ID, getEditor, trackLocked, useEditor } from '../store/store'
 import { blockUrl, GO2_BLOCKS, type Block } from './blocks'
 import { blockActual, buildBlockClip, emptyClipFor } from './build'
 
@@ -106,6 +106,13 @@ export function blockAsset(block: Block, t: Template | undefined, v: number): { 
   if (!built) return null
   const have = st.project.clips[built.id] ?? Object.values(st.project.clips).find(c => c.robot === 'go2' && c.name === built.name)
   return have ? { kind: 'clip', id: have.id } : { kind: 'clip', id: built.id, clip: built }
+}
+
+/** 라이브러리 미리보기용 클립: 항상 새로 만든 블록 클립(목록의 같은 이름 클립을 쓰지 않음 — 나중에 미세 수정을 얹어도 목록 클립은 그대로),
+ * id = BLOCK_PREVIEW_ID. Empty = 30프레임 차렷. */
+export function previewClip(block: Block, t: Template | undefined, v: number): Clip | null {
+  const { defs } = getEditor().getState(), built = block.kind === 'empty' ? emptyClipFor({}, defs) : t ? buildBlockClip(block, t.poses, t.fps, v, defs) : null
+  return built && { ...built, id: BLOCK_PREVIEW_ID }
 }
 
 // The 라이브러리 tab's input for the picked block. target: a GO2 actor id (its track end), null = a new GO2 actor, 'asset' = 목록에만

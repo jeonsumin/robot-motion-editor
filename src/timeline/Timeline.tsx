@@ -68,7 +68,7 @@ function TimeJump({ frame, end }: { frame: number; end: number }) {
 // 클립 편집 모드 bar: path back to the sequence, 원본 보기 (held), 겹쳐 보기 (원본 ghost), CSV 저장 (the clip as edited).
 function ClipEditBar({ clipId, name }: { clipId: string; name: string }) {
   const st = getEditor().getState(), overlay = useEditor(s => s.compareOverlay), peek = useEditor(s => s.clipPeek)
-  const n = useEditor(s => curveKeyCount(s.project.clips[clipId]?.offset))
+  const n = useEditor(s => curveKeyCount(s.project.clips[clipId]?.offset)), draft = useEditor(s => s.clipEditDraft === clipId)
   const [msg, setMsg] = useState('')
   const saveCsv = async () => {
     const s = getEditor().getState()
@@ -87,6 +87,7 @@ function ClipEditBar({ clipId, name }: { clipId: string; name: string }) {
         onKeyDown={ev => { if (ev.key === ' ' || ev.key === 'Enter') { ev.preventDefault(); st.setClipPeek(true) } }} onKeyUp={hold(false)} onBlur={hold(false)}
         title="누르고 있는 동안 수정 전 원본을 보여 줍니다">원본 보기</button>
       <button aria-pressed={overlay} onClick={() => st.setCompareOverlay(!overlay)} title="수정 전 원본을 반투명으로 겹쳐 보여 줍니다">겹쳐 보기</button>
+      {draft && <button onClick={() => st.cancelDraftClip()} title="라이브러리 미리보기에서 넣은 이 클립을 목록에서 빼고 나갑니다 (실행취소로 되돌릴 수 있음)">추가 취소</button>}
       <button className="tl-primary" onClick={saveCsv} title="수정한 클립을 CSV로 저장합니다 (기본자세·리드인 없이, 루트 로컬)">CSV 저장</button>
       {msg && <span className="tl-cutmsg" role="status">{msg}</span>}
     </span>

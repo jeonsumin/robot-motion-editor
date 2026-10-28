@@ -2,10 +2,10 @@ import { loadDef } from '../test/defs'
 import { beforeEach, expect, test } from 'vitest'
 import { evalCurve } from '../model/curve'
 import type { RobotDefs } from '../model/evaluate'
-import { baseClip } from '../model/itemClip'
+import { baseClip, curveKeyCount } from '../model/itemClip'
 import { evaluateClip } from '../model/pose'
 import { playRange, splitTarget } from '../transport'
-import { actorOf, assetOwner, CLIP_ACTOR, CLIP_ITEM, createEditorStore, editingItem, editTarget, gizmoLock, keyTarget } from './store'
+import { actorOf, assetOwner, BLOCK_PREVIEW_ID, CLIP_ACTOR, CLIP_ITEM, createEditorStore, editingItem, editTarget, gizmoLock, keyTarget } from './store'
 
 // 클립 편집 모드: the clip alone on a virtual actor/piece (not in the project), edits into its 수정 층 (asset:<clipId>).
 const defs: RobotDefs = { g1: loadDef('g1'), go2: loadDef('go2') }
@@ -128,4 +128,28 @@ test('shortening the clip drops its 수정 층 keys past the end; 키 줄이기 
   const off = s().project.clips[c].offset
   s().simplifyClip(c, 0.01)
   expect(s().project.clips[c].offset).toEqual(off)
+})
+
+// 고쳐서 추가 (user): the 라이브러리 미리보기 clip goes into 목록 as <name>_수정 and opens in 클립 편집; 추가 취소 takes it out again
+test('editPreviewAsClip / cancelDraftClip: a new 목록 clip in 클립 편집, edits into its 수정 층, 추가 취소 removes it (undoable)', () => {
+  const src = s().project.clips[c], n0 = Object.keys(s().project.clips).length
+  expect(s().editPreviewAsClip()).toBeNull() // nothing previewed
+  s().setBlockPreview({ blockId: 'x', value: '', clip: { ...src, id: BLOCK_PREVIEW_ID, name: 'Hello' } })
+  expect(s().editPreviewAsClip()).toBe('Hello_수정')
+  const id = s().clipEdit!
+  expect([s().blockPreview, s().clipEditDraft, s().project.clips[id].name, Object.keys(s().project.clips).length]).toEqual([null, id, 'Hello_수정', n0 + 1])
+  expect(s().project.clips[id].channels).toEqual(src.channels) // the block's own data, nothing changed
+  s().setValue(CLIP_ACTOR, ch, 0.9) // edits land in its 수정 층, the original stays
+  expect(curveKeyCount(s().project.clips[id].offset)).toBeGreaterThan(0)
+  expect(s().project.clips[id].channels).toEqual(src.channels)
+
+  s().cancelDraftClip()
+  expect([s().clipEdit, s().clipEditDraft, s().project.clips[id], Object.keys(s().project.clips).length]).toEqual([null, null, undefined, n0])
+  s().undo() // the 추가 취소 comes back undone: the clip is back (in 목록, not in 클립 편집)
+  expect(s().project.clips[id]?.name).toBe('Hello_수정')
+
+  s().setBlockPreview({ blockId: 'x', value: '', clip: { ...src, id: BLOCK_PREVIEW_ID, name: 'Hello' } })
+  expect(s().editPreviewAsClip()).toBe('Hello_수정_2') // a taken name gets the next number
+  s().closeClipEdit()
+  expect(s().clipEditDraft).toBeNull() // left the usual way: it is a normal 목록 clip now
 })

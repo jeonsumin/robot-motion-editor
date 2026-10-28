@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { pieceName, projectTitle } from '../model/sequence'
 import { offsetKeyCount } from '../model/itemClip'
-import { getEditor, useEditor } from '../store/store'
+import { BLOCK_PREVIEW_ID, getEditor, useEditor } from '../store/store'
 import type { Item, Project } from '../model/types'
 import { itemLead, itemTail, type Lead } from '../model/restPose'
 import { INERTIA_WHY } from '../model/inertia'
@@ -40,6 +40,19 @@ function CompareTitle({ id }: { id: string }) {
     <div className="pane-title static">
       <span>비교 프리뷰 · {useCompareLabel(id)}</span>
       <button aria-label="비교 닫기" onClick={() => getEditor().getState().closeComparePane(id)}>✕</button>
+    </div>
+  )
+}
+
+// 라이브러리 미리보기 (user): a library block, not in the project, looping on its own clock; ✕ closes it
+function BlockTitle() {
+  const name = useEditor(s => s.blockPreview?.clip.name ?? '')
+  return (
+    <div className="pane-title static">
+      <span>라이브러리 미리보기 · {name}</span>
+      <button className="pane-act" title={`이 동작을 '${name}_수정' 클립으로 목록에 넣고 클립 편집에서 자세를 고칩니다`}
+        onClick={() => getEditor().getState().editPreviewAsClip()}>고쳐서 추가</button>
+      <button aria-label="라이브러리 미리보기 닫기" onClick={() => getEditor().getState().setBlockPreview(null)}>✕</button>
     </div>
   )
 }
@@ -259,8 +272,9 @@ export default function StagePanes({ robot }: { robot: ReactNode }) {
   // robot row: [main | clip preview? | compare...]; equal widths whenever the pane set changes (not persisted)
   const compare = useEditor(s => s.comparePanes), itemPreview = useEditor(s => s.itemPreview)
   const spanA = useEditor(s => s.spanPreview?.[0] ?? null), spanB = useEditor(s => s.spanPreview?.[1] ?? null) // numbers: a new array per call would re-render forever
+  const blockName = useEditor(s => s.blockPreview?.clip.name ?? null) // its key: a new block / value restarts the loop from frame 0
   const extra = [...(spanA !== null && spanB !== null ? [{ preview: false, span: true, id: 'span' }] : []), ...(itemPreview ? [{ preview: true, span: false, id: itemPreview }] : []),
-    ...compare.map(id => ({ preview: false, span: false, id }))]
+    ...compare.map(id => ({ preview: false, span: false, id })), ...(blockName !== null ? [{ preview: false, span: false, id: BLOCK_PREVIEW_ID }] : [])]
   const n = extra.length + 1, ids = extra.map(e => e.id).join()
   const [row, setRow] = useState({ ids, r: [1] })
   const ratios = row.ids === ids && row.r.length === n ? row.r : equalRatios(n)
@@ -315,14 +329,15 @@ export default function StagePanes({ robot }: { robot: ReactNode }) {
         </section>
         {extra.map(({ preview: pv, span: sp, id }, i) => { // divider i sits between pane i and i+1
           return (
-            <Fragment key={(sp ? 'span:' : pv ? 'pv:' : 'cmp:') + id}>
-              <div className="pane-sep" role="separator" tabIndex={0} aria-label={sp ? '구간 프리뷰 분할' : pv ? '클립 프리뷰 분할' : `비교 프리뷰 분할 ${i + 1 - (itemPreview ? 1 : 0) - (spanA !== null ? 1 : 0)}`} aria-orientation="vertical"
+            <Fragment key={(sp ? 'span:' : pv ? 'pv:' : 'cmp:') + id + (id === BLOCK_PREVIEW_ID ? ':' + blockName : '')}>
+              <div className="pane-sep" role="separator" tabIndex={0} aria-label={sp ? '구간 프리뷰 분할' : pv ? '클립 프리뷰 분할' : id === BLOCK_PREVIEW_ID ? '라이브러리 미리보기 분할' : `비교 프리뷰 분할 ${i + 1 - (itemPreview ? 1 : 0) - (spanA !== null ? 1 : 0)}`} aria-orientation="vertical"
                 aria-valuenow={Math.round(ratios[i] * 100)} aria-valuemin={ROW_MIN * 100} aria-valuemax={Math.round((ratios[i] + ratios[i + 1] - ROW_MIN) * 100)}
                 onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); e.currentTarget.focus(); setRowDrag(i) }}
                 onPointerMove={e => rowMove(e, i)} onPointerUp={rowEnd} onPointerCancel={rowEnd}
                 onDoubleClick={() => setRatios(equalRatios(n))} onKeyDown={e => rowKey(e, i)} />
-              <section className="pane pane-robot" aria-label={sp ? '구간 프리뷰' : pv ? '클립 프리뷰' : '비교 프리뷰'} style={{ flex: `${ratios[i + 1]} 1 0` }}>
-                {sp ? <SpanPane span={[spanA!, spanB!]} /> : pv ? <ItemPreview id={id} /> : <><CompareTitle id={id} /><div className="stage-3d"><Stage compareClipId={id} /></div></>}
+              <section className="pane pane-robot" aria-label={sp ? '구간 프리뷰' : pv ? '클립 프리뷰' : id === BLOCK_PREVIEW_ID ? '라이브러리 미리보기' : '비교 프리뷰'} style={{ flex: `${ratios[i + 1]} 1 0` }}>
+                {sp ? <SpanPane span={[spanA!, spanB!]} /> : pv ? <ItemPreview id={id} />
+                  : <>{id === BLOCK_PREVIEW_ID ? <BlockTitle /> : <CompareTitle id={id} />}<div className="stage-3d"><Stage compareClipId={id} /></div></>}
               </section>
             </Fragment>
           )
