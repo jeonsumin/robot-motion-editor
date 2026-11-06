@@ -86,3 +86,25 @@ test('feetLock + autoGround: feet stay within 1 cm while the body is raised and 
   const b = feet()
   a.forEach((m, i) => [3, 7, 11].forEach(k => expect(Math.abs(m[k] - b[i][k])).toBeLessThan(0.01)))
 })
+
+test('shiftBody (체중 이동): the body moves along its own heading, the feet stay (feetLock off too), one undo; too far is refused', () => {
+  for (const robot of ['g1', 'go2'] as const) {
+    const st2 = createEditorStore(defs), g = () => st2.getState()
+    if (robot === 'go2') g().addActor('go2')
+    const id = g().project.actors.find(a => a.robot === robot)!.id
+    g().standPose(id) // 차렷 (a new GO2 actor's empty clip has straight legs: nothing to bend)
+    g().editPose(id, { 'root.yaw': Math.PI / 2 }) // facing +y: 앞 = +y, 왼쪽 = −x
+    expect(g().feetLock).toBe(false)
+    const feet = () => { const p = g().poseAt(id)!; return legsOf(p.def).map(l => footMat(l, bodyMat(p.body), p.q)) }
+    const a = feet(), b0 = g().poseAt(id)!.body, before = g().project
+    expect(g().shiftBody(id, 0.02, 0)).toBe(true)
+    expect(g().shiftBody(id, 0, 0.02)).toBe(true)
+    const b1 = g().poseAt(id)!.body
+    expect(b1.x - b0.x).toBeCloseTo(-0.02, 4); expect(b1.y - b0.y).toBeCloseTo(0.02, 4)
+    feet().forEach((m, i) => [3, 7, 11].forEach(k => expect(Math.abs(m[k] - a[i][k])).toBeLessThan(0.01)))
+    g().undo(); g().undo()
+    expect(g().project).toBe(before)
+    expect(g().shiftBody(id, 1, 0)).toBe(false)
+    expect(g().project).toBe(before)
+  }
+})

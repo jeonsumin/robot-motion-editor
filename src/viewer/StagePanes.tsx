@@ -118,10 +118,10 @@ function ItemPreview({ id }: { id: string }) {
       </div>
       <div className="stage-3d">
 <Stage compareClipId={item.refId} range={range} itemId={id}>{/* joints are picked and turned here (Stage: the piece's gizmo) */}
-              {restButtons}
+              {!item.walk && restButtons}{/* 걷기 (§20): pure movement, no 기본자세 */}
             </Stage>
-        <LeadRow id={id} item={item} ld={ld ?? itemLead(project, defs, { ...item, restPose: 'prepend' })!} on={!!ld}
-          toggle={() => rest(ld ? null : 'prepend')} />
+        {!item.walk && <LeadRow id={id} item={item} ld={ld ?? itemLead(project, defs, { ...item, restPose: 'prepend' })!} on={!!ld}
+          toggle={() => rest(ld ? null : 'prepend')} />}
         {msg && <div className="pv-msg" role="status">{msg}</div>}
       </div>
     </>

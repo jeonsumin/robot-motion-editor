@@ -10,6 +10,7 @@ import ExportDialog from './export/ExportDialog'
 import { startTransport } from './transport'
 import { onMessage, onShowHub } from './projectActions'
 import FileMenu from './FileMenu'
+import ReviewDialog from './review/ReviewDialog'
 import PhysicsDialog from './physics/PhysicsDialog'
 import { usePhysics } from './physics/physicsStore'
 import { stale } from './physics/runItem'
@@ -30,6 +31,7 @@ function Menubar() {
   const st = useEditor(s => s)
   const [exporting, setExporting] = useState(false)
   const [physicsOpen, setPhysicsOpen] = useState(false)
+  const [reviewOpen, setReviewOpen] = useState(false) // 검수 목록 (§12)
   const name = useEditor(s => s.fileName ?? 'Motion Editor'), dirty = useEditor(s => s.dirty)
   const [msg, setMsg] = useState('')
   const title = name + (dirty ? ' •' : '')
@@ -48,10 +50,12 @@ function Menubar() {
   return (
     <>
       <FileMenu onExport={() => setExporting(true)} onPhysics={() => setPhysicsOpen(true)} />
+      <button className="mb-review" onClick={() => setReviewOpen(true)} title="모션의 튀는 관절(로봇 속도 한계 초과·급변)과 자가충돌을 모아 보고 판정합니다">⚠ 검수 목록</button>
       <span className="mb-title">{title}</span>
       {msg && <span role="status" className="mb-msg">{msg}</span>}
       <PhysicsDialog open={physicsOpen} onClose={() => setPhysicsOpen(false)} />
       <ExportDialog open={exporting} onClose={() => setExporting(false)} />
+      <ReviewDialog open={reviewOpen} onClose={() => setReviewOpen(false)} />
     </>
   )
 }

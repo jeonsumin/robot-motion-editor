@@ -297,7 +297,7 @@ export default function GraphCanvas() {
         tv.ppf = Math.min(Math.max(tv.ppf * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 0.5), 40)
         tv.scrollF = Math.max(minScrollF(), fAt - (x - LABEL_W) / tv.ppf)
       } else if (e.shiftKey) vs = { ...vs, y0: vs.y0 - (e.deltaY || e.deltaX) } // pan values
-      else { // 휠 = 구간 이동 (user, like the sequence): up = later; the playhead keeps following the pointer unless 고정
+      else { // 휠 = 구간 이동 (user, like the sequence): down = later; the playhead keeps following the pointer unless 고정
         tv.scrollF = Math.max(minScrollF(), tv.scrollF + wheelFrames(e, tv.ppf))
         if (hoverFrame(pos(e).x, LABEL_W, scale(), hoverOff()) !== null) hover.push(seqFrame(pos(e).x))
       }

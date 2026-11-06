@@ -1,4 +1,5 @@
 import { editingItem, getEditor, type EditorState } from './store/store'
+import { playNow } from './playClock'
 import { onHandleArrow } from './layout/useLayout'
 import { sortedItems } from './model/sequence'
 import { previewRange } from './model/restPose'
@@ -76,7 +77,7 @@ export function startTransport(): () => void {
     const s = ed.getState()
     if (s.playing) {
       const [lo, hi] = playRange(s)
-      const now = performance.now()
+      const now = playNow() // 재생 fps: the playback clock, not wall time
       if (!was || hi <= lo || s.frame !== last || s.frame < lo || s.frame >= hi) { // start, scrubbed, or range moved away
         t0 = now; f0 = s.frame >= hi || s.frame < lo ? lo : s.frame }
       let f = f0 + Math.floor((now - t0) * 60 / 1000) // from start time, so no drift accumulates
@@ -87,7 +88,7 @@ export function startTransport(): () => void {
     was = s.playing
     const pr = s.previewPlaying && s.itemPreview ? previewRange(s.project, s.defs, s.itemPreview) : null
     if (pr && pr[1] > pr[0]) {
-      const [lo, hi] = pr, now = performance.now()
+      const [lo, hi] = pr, now = playNow()
       if (!pwas || s.previewFrame !== plast || s.previewFrame < lo || s.previewFrame >= hi) { pt0 = now; pf0 = s.previewFrame >= hi || s.previewFrame < lo ? lo : s.previewFrame }
       let f = pf0 + Math.floor((now - pt0) * 60 / 1000)
       if (f >= hi) { pt0 = now; pf0 = lo; f = lo }

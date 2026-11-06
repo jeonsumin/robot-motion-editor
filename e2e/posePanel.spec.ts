@@ -54,6 +54,17 @@ test('GO2: parts in FR FL RR RL order, body rows, 무대 X + undo, 기본 서기
   // 바닥 밀착 → 높이 disabled
   await panel.getByRole('checkbox', { name: '바닥 밀착 (높이 자동)' }).check()
   await expect(panel.getByRole('slider', { name: '높이 슬라이더' })).toBeDisabled()
+  // 체중 이동 (§18): the body 2 cm along its heading, the feet held (also with 네 발 위치 고정 off), one undo per click
+  await lock.click()
+  await expect(lock).toHaveAttribute('aria-pressed', 'false')
+  await panel.getByRole('button', { name: '기본 서기로' }).click()
+  const feet = () => page.evaluate(id => { const s = (window as any).__editor.getState(), p = s.poseAt(id); return { x: p.body.x as number, q: p.q as number[] } }, id)
+  const a = await feet()
+  await panel.getByRole('group', { name: '체중 이동' }).getByRole('button', { name: '▲ 앞' }).click()
+  await expect.poll(async () => (await feet()).x - a.x).toBeCloseTo(0.02, 3) // facing +x: 앞 = +x
+  expect(Math.max(...(await feet()).q.map((v, i) => Math.abs(v - a.q[i])))).toBeGreaterThan(0.005) // the legs bent to keep the feet
+  await page.keyboard.press('Control+z')
+  await expect.poll(async () => (await feet()).x).toBeCloseTo(a.x, 4)
   expect(errors).toEqual([])
 })
 

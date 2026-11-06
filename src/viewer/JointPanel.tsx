@@ -9,7 +9,7 @@ import { actorOf, assetOwner, clipLocked, editLock, editTarget, getEditor, keyOw
 import { playRange } from '../transport'
 
 // 관절 패널 (spec 2026-10-19-pose-panel-design.md §2), the inspector's 값 section: the whole robot — 몸통 (무대 위치 · 자세) rows,
-// then every part (부위) with one slider row per joint — frame/key tools on the whole pose, 기본 서기로, foot lock, 바닥 밀착 and
+// then every part (부위) with one slider row per joint — frame/key tools on the whole pose, 기본 서기로, foot lock, 바닥 밀착, 체중 이동 and
 // the 구간 row. Every value edit goes through editPose (setValue per channel, one undo step).
 
 const ROOT_RANGE: Record<string, [number, number]> = {
@@ -21,6 +21,8 @@ const BODY: [string, string, number][] = [ // channel, label, number step in m (
   ['root.pitch', '앞뒤 기울기', 0], ['root.roll', '좌우 기울기', 0],
 ]
 const BODY_LABEL = new Map(BODY.map(([c, l]) => [c, l]))
+const SHIFT = 0.02 // m per 체중 이동 click (the Go2 Dance Studio's step)
+const SHIFTS: [string, number, number][] = [['◀ 왼', 0, 1], ['오른 ▶', 0, -1], ['▲ 앞', 1, 0], ['▼ 뒤', -1, 0]] // label, forward, left
 const GO2_PARTS: [string, string][] = [['FR', '오른앞 (FR)'], ['FL', '왼앞 (FL)'], ['RR', '오른뒤 (RR)'], ['RL', '왼뒤 (RL)']]
 const GO2_ROW: Record<string, string> = { hip: '고관절', thigh: '허벅지', calf: '무릎' }
 const isAngle = (ch: string, joint: boolean) => joint || /roll|pitch|yaw/.test(ch)
@@ -166,6 +168,10 @@ export default function JointPanel() {
         <button className="jp-unit" aria-pressed={s.feetLock} onClick={() => act.setFeetLock(!s.feetLock)}>{feet} 발 위치 고정</button>
         <label className="jp-check"><input type="checkbox" checked={s.autoGround} onChange={e => act.setAutoGround(e.target.checked)} />바닥 밀착 (높이 자동)</label>
         <button disabled={blocked('root.z') || s.autoGround} onClick={fit}>바닥에 맞추기</button>
+      </div>
+      <div className="jp-tools jp-wrap" role="group" aria-label="체중 이동">
+        <span className="jp-lbl" title={`몸통(골반)만 ${SHIFT * 100}cm씩 옮기고 ${feet} 발은 제자리 (발 위치 고정이 꺼져 있어도 항상 고정) · 로봇이 보는 방향 기준`}>체중 이동</span>
+        {SHIFTS.map(([label, fw, lf]) => <button key={label} disabled={poseBlocked} onClick={() => { if (!act.shiftBody(v.actor.id, fw * SHIFT, lf * SHIFT)) setRefused(Date.now()) }}>{label}</button>)}
       </div>
       {v.sections.map(x => (
         <div key={x.title}>

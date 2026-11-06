@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { playNow } from '../playClock'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -7,7 +8,7 @@ import { COLOR, stageOf } from '../model/defaults'
 import { evaluate, evaluateClip, evaluateItem, evaluateRoot, placeItemPose } from '../model/evaluate'
 import { rebasePose } from '../model/pose'
 import { itemLead, leadInPose, restClipFor, tailedClip } from '../model/restPose'
-import { baseClip, editedClip, offsetKeyCount, withUse } from '../model/itemClip'
+import { baseClip, editedClip, offsetKeyCount, walkOf, withUse } from '../model/itemClip'
 import { nearestAngle, quatYaw } from '../model/rootMath'
 import { hiddenAt, itemLen, resolve, sortedItems, stitchTransforms, worldToClipRoot } from '../model/sequence'
 import type { Actor, Clip, Project } from '../model/types'
@@ -118,7 +119,8 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
     if (mainView || editPane) scene.add(tc.getHelper())
     // dev/e2e hook
     // dev/e2e hook: __stage = main pane, __stages = every pane by key ('main' or the compare clip id)
-    const hook = { stage: () => (stageG?.visible ? stageG : null), camera, tc, entries: () => entries, renderer, camTarget: () => orbit.target.toArray(), overlay: () => overlays.values().next().value?.rig ?? null, overlays: () => overlays }
+    const hook = { stage: () => (stageG?.visible ? stageG : null), walkGuide: () => guide, walkPickShown: () => pickG.visible,
+      screenOf: (x: number, y: number) => { const v = new THREE.Vector3(x, y, 0).project(camera), r = renderer.domElement.getBoundingClientRect(); return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height] }, camera, tc, entries: () => entries, renderer, camTarget: () => orbit.target.toArray(), overlay: () => overlays.values().next().value?.rig ?? null, overlays: () => overlays }
     const syncStage = () => {
       const { width, depth } = stageOf(store.getState().project), key = `${width}x${depth}`
       if (key === stageKey) return
@@ -136,7 +138,7 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
     }
 
     let dirty = true, raf = 0
-    const t0 = performance.now()
+    const t0 = playNow() // pane loops run on the playback clock (재생 fps)
     let shownF = -1
     // compare-pane pose at clip frame f (re-based to the range start when looping a range)
     const clipPose = (clip: Clip, def: RobotDef, f: number) =>
@@ -196,12 +198,12 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
         o.rig.applyPose(pose())
       }
     }
-    const spanT0 = performance.now()
+    const spanT0 = playNow()
     const applyAll = () => {
       if (span) { // 구간 프리뷰: the stored sequence on its own loop over spanPreview (read each frame: a right-drag reshapes it live)
         const s = store.getState(), sp = s.spanPreview
         if (!sp) return
-        const f = sp[0] + Math.floor((performance.now() - spanT0) * 60 / 1000) % Math.max(sp[1] - sp[0], 1)
+        const f = sp[0] + Math.floor((playNow() - spanT0) * 60 / 1000) % Math.max(sp[1] - sp[0], 1)
         for (const a of s.project.actors) {
           const e = entries.get(a.id)
           if (!e) continue
@@ -295,9 +297,9 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
       // item preview follows the main playhead: range frame lo shows at the item start, or (기본자세 덧붙이기) 1.5 s before it,
       // where the timeline draws the lead-in, so preview, lane, physics graph and CSV rows line up; clamped to the range outside it
       const it = itemId ? s.project.sequence.tracks.flatMap(t => t.items).find(i => i.id === itemId) : undefined
-      const f = !ranged ? Math.floor((performance.now() - t0) * 60 / 1000) % Math.max(clip.length, 1) // ⇄ 비교: its own loop, not the sequence (user)
+      const f = !ranged ? Math.floor((playNow() - t0) * 60 / 1000) % Math.max(clip.length, 1) // ⇄ 비교: its own loop, not the sequence (user)
         : it ? lo + Math.min(Math.max(s.frame - it.start + (itemLead(s.project, s.defs, it)?.lead ?? 0), 0), hi - lo - 1)
-        : lo + Math.floor((performance.now() - t0) * 60 / 1000) % Math.max(hi - lo, 1)
+        : lo + Math.floor((playNow() - t0) * 60 / 1000) % Math.max(hi - lo, 1)
       if (f === shownF) return
       shownF = f
       const pose = clipPose(clip, s.defs[clip.robot], Math.min(Math.max(f, 0), clip.length - 1))
@@ -343,6 +345,39 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
         e.trail.geometry.dispose()
         e.trail.geometry = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3))
       }
+    }
+
+    // 걷기 조각 (§20) selected in the sequence view: its path dashed, the target ring and the arrival heading (display only, main view)
+    const guide = new THREE.Group(), GUIDE_TONE = { ok: '#3FB950', warn: '#F0883E', bad: '#E5484D' } as const
+    guide.renderOrder = 997
+    if (mainView) scene.add(guide)
+    let guideKey: [Project | null, string | null] = [null, null]
+    let guideAt: { itemId: string; actorId: string; to: [number, number]; from: [number, number] } | null = null // the ring 끌기 (§21) reads it
+    const syncGuide = () => {
+      const s = store.getState(), id = !s.editing && !s.clipEdit ? s.selItem : null
+      if (guideKey[0] === s.project && guideKey[1] === id) return
+      guideKey = [s.project, id]
+      for (const c of [...guide.children]) { guide.remove(c); disposeObj(c) }
+      const track = id ? s.project.sequence.tracks.find(t => t.kind === 'motion' && t.items.some(i => i.id === id)) : undefined
+      const it = track?.items.find(i => i.id === id), w = it && walkOf(s.project, s.defs, it)
+      guide.visible = !!w && !track!.hidden
+      dirty = true
+      guideAt = null
+      if (!w || !it || !track?.actorId) return
+      const pts: number[] = [], n = it.trimOut - it.trimIn
+      for (let f = 0; f < n; f++) { const r = evaluateRoot(s.project, s.defs, track.actorId, it.start + f).rootPos; pts.push(r[0], r[1], 0.004) }
+      const actor = s.project.actors.find(a => a.id === track.actorId), tone = GUIDE_TONE[w.report.tone]
+      const line = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)),
+        new THREE.LineDashedMaterial({ color: actor?.color ?? tone, dashSize: 0.06, gapSize: 0.04, depthTest: false, transparent: true }))
+      line.computeLineDistances()
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.13, 0.16, 48), new THREE.MeshBasicMaterial({ color: tone, side: THREE.DoubleSide, depthTest: false, transparent: true, opacity: 0.9 }))
+      ring.position.set(it.walk!.to[0], it.walk!.to[1], 0.005)
+      const end = evaluateRoot(s.project, s.defs, track.actorId, it.start + n - 1), yaw = quatYaw(end.rootQuat)
+      const arrow = new THREE.ArrowHelper(new THREE.Vector3(Math.cos(yaw), Math.sin(yaw), 0), new THREE.Vector3(it.walk!.to[0], it.walk!.to[1], 0.006), 0.32, tone, 0.1, 0.07)
+      arrow.traverse(o => { const m = (o as THREE.Mesh).material as THREE.Material | undefined; if (m) { m.depthTest = false; m.transparent = true } })
+      for (const o of [line, ring, arrow]) o.renderOrder = 997
+      guide.add(line, ring, arrow)
+      if (guide.visible) guideAt = { itemId: it.id, actorId: track.actorId, to: [it.walk!.to[0], it.walk!.to[1]], from: [pts[0], pts[1]] }
     }
 
     // crossfade (displayed pose is a blend, not invertible) or stitched first frame (root x/y/yaw pinned): no gizmo
@@ -538,9 +573,61 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
         store.getState().setFrame(trackEnd(store.getState().project, id) - 1)
       }, stop)
     }
+    // 걷기 도착점 (§21): 찍기 (the store's walkPick: the next click on the floor) and the selected walk's ring dragged. A ring and a
+    // dashed line from the walk's start follow the pointer with X · Y · distance (stage, 1 cm steps); nothing changes until the
+    // click / release (one undo), Esc · right click cancel.
+    const pickTag = document.createElement('div')
+    pickTag.className = 'wk-pick-tag'; pickTag.hidden = true
+    if (mainView) el.appendChild(pickTag)
+    const pickCol = css('--accent') || '#F0A43A'
+    const pickLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: pickCol, dashSize: 0.06, gapSize: 0.04, depthTest: false, transparent: true }))
+    const pickRing = new THREE.Mesh(new THREE.RingGeometry(0.13, 0.16, 48), new THREE.MeshBasicMaterial({ color: pickCol, side: THREE.DoubleSide, depthTest: false, transparent: true }))
+    const pickG = new THREE.Group()
+    pickLine.renderOrder = pickRing.renderOrder = 998; pickG.add(pickLine, pickRing); pickG.visible = false
+    if (mainView) scene.add(pickG)
+    const cm = (v: number) => Math.round(v * 100) / 100
+    const showPick = (ev: MouseEvent, from: [number, number]): [number, number] | null => {
+      aim(ev)
+      if (!ray.ray.intersectPlane(floor, hitP)) { hidePick(); return null }
+      const x = cm(hitP.x), y = cm(hitP.y)
+      pickLine.geometry.setFromPoints([new THREE.Vector3(from[0], from[1], 0.008), new THREE.Vector3(x, y, 0.008)]); pickLine.computeLineDistances()
+      pickRing.position.set(x, y, 0.009); pickG.visible = true
+      const r = el.getBoundingClientRect()
+      pickTag.textContent = `X ${x.toFixed(2)} · Y ${y.toFixed(2)} m · 출발점에서 ${Math.hypot(x - from[0], y - from[1]).toFixed(2)} m`
+      pickTag.style.left = `${ev.clientX - r.left + 6}px`; pickTag.style.top = `${ev.clientY - r.top}px`; pickTag.hidden = false
+      dirty = true
+      return [x, y]
+    }
+    const hidePick = () => { if (pickG.visible || !pickTag.hidden) { pickG.visible = false; pickTag.hidden = true; dirty = true } }
+    let ringDragging = false, consumed = false // consumed: this press was the ring's, not a select click
+    const ringDrag = (ev: MouseEvent): boolean => {
+      const g = guideAt, s = store.getState()
+      if (!g || s.walkPick || s.playing || trackLocked(s.project, g.actorId)) return false
+      aim(ev)
+      if (!ray.ray.intersectPlane(floor, hitP) || Math.hypot(hitP.x - g.to[0], hitP.y - g.to[1]) > 0.25) return false
+      ringDragging = true; consumed = true; orbit.enabled = false; dom.style.cursor = 'grabbing'; guide.visible = false
+      let at: [number, number] | null = null
+      const stop = () => { ringDragging = false; hidePick(); orbit.enabled = true; dom.style.cursor = ''; guideKey = [null, null]; syncGuide() }
+      trackDrag(m => { at = showPick(m, g.from) ?? at }, () => {
+        stop()
+        if (!at || (at[0] === g.to[0] && at[1] === g.to[1]) || store.getState().setWalk(g.itemId, { to: at })) return
+        const pv = store.getState().previewWalk(g.itemId, { to: at }) // §22: refused — why
+        setWalkMsg(pv?.report.tone === 'bad' ? `한계 초과가 되어 옮기지 않았습니다${pv.minFrames ? ` (그 자리는 최소 ${(pv.minFrames / 60).toFixed(1)}초 필요 — 인스펙터에서 찍으면 바로 고칠 수 있음)` : ''}` : '도착 위치를 바꿀 수 없습니다')
+      }, stop)
+      return true
+    }
+    const onPickKey = (e: KeyboardEvent) => { // Esc: 찍기 off (before the app's own Esc), or the ring drag cancelled
+      if (e.key !== 'Escape') return
+      if (ringDragging) { e.preventDefault(); e.stopPropagation(); cancelDrag(); return }
+      const s = store.getState()
+      if (s.walkPick) { e.preventDefault(); e.stopPropagation(); s.setWalkPick(null) }
+    }
+    if (mainView) window.addEventListener('keydown', onPickKey, true)
     const onDown = (ev: PointerEvent) => {
-      down = [ev.clientX, ev.clientY]; onGizmo = tc.axis !== null; el.focus()
+      down = [ev.clientX, ev.clientY]; onGizmo = tc.axis !== null; el.focus(); consumed = false
       if (!mainView || onGizmo || ev.button !== 0) return
+      if (store.getState().walkPick) return // 찍기: the click lands in onUp; a drag turns the camera
+      if (ringDrag(ev)) return
       const b = pick(ev)
       if (!b || !canDrag(b.id) || !ray.ray.intersectPlane(floor, hitP)) return
       const pl = actorOf(store.getState(), b.id)!.placement
@@ -549,6 +636,8 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
     }
     let hoverEv: PointerEvent | null = null, hoverRaf = 0
     const onMove = (ev: PointerEvent) => {
+      const wp = mainView && !ringDragging ? store.getState().walkPick : null
+      if (wp && !grab) { showPick(ev, wp.from); dom.style.cursor = 'crosshair'; return }
       if (!grab) { // hover cursor, one raycast per frame
         if (!ev.buttons && !hoverRaf) hoverRaf = requestAnimationFrame(() => { hoverRaf = 0; const b = hoverEv && pick(hoverEv); dom.style.cursor = b && canDrag(b.id) ? 'grab' : '' })
         hoverEv = ev
@@ -573,7 +662,15 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
       const g = grab
       if (g) { grab = null; orbit.enabled = true }
       if (g?.on) { store.getState().endGesture(); dom.style.cursor = 'grab'; return }
+      if (consumed) { consumed = false; return } // the ring was pressed
       if (!down || Math.hypot(ev.clientX - down[0], ev.clientY - down[1]) > 4 || onGizmo) return
+      const wp = mainView ? store.getState().walkPick : null
+      if (wp) { // 찍기: a left click sets it, a right click cancels; off either way
+        const at = ev.button === 0 ? showPick(ev, wp.from) : null
+        store.getState().setWalkPick(null)
+        if (at) wp.apply(at)
+        return
+      }
       const best = pick(ev)
       if (best) store.getState().select(best.id, best.via)
       else store.getState().select(null)
@@ -605,7 +702,7 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
     ro.observe(el)
 
     let wasLocked = false
-    if (cid) { syncClip(); applyClip(); if (editPane) syncSelection() } else { syncActors(); applyAll(); if (mainView) syncSelection() }
+    if (cid) { syncClip(); applyClip(); if (editPane) syncSelection() } else { syncActors(); applyAll(); if (mainView) { syncSelection(); syncGuide() } }
     syncStage()
     const unsub = store.subscribe((s, prev) => {
       if (s.project !== prev.project) syncStage()
@@ -618,6 +715,8 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
       if (s.project !== prev.project || s.clipEdit !== prev.clipEdit) syncActors()
       applyAll()
       if (span) return // read-only: no selection or gizmo
+      if (mainView) syncGuide()
+      if (mainView && s.walkPick !== prev.walkPick && !s.walkPick) { hidePick(); if (!ringDragging) dom.style.cursor = '' }
       const key = (p: typeof s.project) => p.actors.map(a => a.id + a.robot).join() + (s.clipEdit ?? '')
       const lk = locked()
       if (s.sel !== prev.sel || key(s.project) !== key(prev.project) || lk !== wasLocked) syncSelection()
@@ -676,10 +775,13 @@ export default function Stage({ compareClipId: cid, range, itemId, span, childre
       dom.removeEventListener('pointercancel', onCancel)
       dom.removeEventListener('pointermove', onMove); cancelAnimationFrame(hoverRaf)
       if (grab?.on) store.getState().endGesture()
-      if (walking) cancelDrag()
+      if (walking || ringDragging) cancelDrag()
+      window.removeEventListener('keydown', onPickKey, true)
+      disposeObj(pickG); pickTag.remove()
       el.removeEventListener('keydown', onKey)
       for (const e of entries.values()) disposeEntry(e)
       for (const o of overlays.values()) disposeObj(o.rig.root)
+      disposeObj(guide)
       disposeObj(grid); if (stageG) { scene.remove(stageG); disposeStage(stageG) }; disposeObj(axisRings); disposeObj(viewRing)
       tc.dispose(); orbit.dispose()
       // dispose() alone keeps the WebGL context alive until GC; release it now so opening/closing

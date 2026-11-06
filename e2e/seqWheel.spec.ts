@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 
-// Sequence wheel (user, 수정변동사항.md §4): a plain wheel moves through time — up = later, down = earlier — and the playhead keeps
+// Sequence wheel (user, 수정변동사항.md §4): a plain wheel moves through time — down = later, up = earlier — and the playhead keeps
 // following the pointer (unless 재생헤드 고정); Shift + wheel or a wheel over the track labels scrolls the rows; a sideways
 // trackpad swipe scrolls time; Ctrl + wheel zooms.
 const boot = async (page: Page) => {
@@ -9,18 +9,18 @@ const boot = async (page: Page) => {
 }
 const st = (page: Page) => page.evaluate(() => { const w = window as any; return { scrollF: w.__tv.scrollF as number, frame: w.__editor.getState().frame as number, pinned: w.__editor.getState().playheadPinned as boolean } })
 
-test('sequence wheel: up = later, down = earlier, the playhead follows the pointer; Shift = rows; sideways = time', async ({ page }) => {
+test('sequence wheel: down = later, up = earlier, the playhead follows the pointer; Shift = rows; sideways = time', async ({ page }) => {
   await boot(page)
   await page.evaluate(() => { const s = (window as any).__editor.getState(); s.addActor('g1'); (window as any).__tv.scrollF = 100 })
   const box = (await page.locator('.seq-canvas').boundingBox())!
   await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5)
   await expect.poll(async () => (await st(page)).frame).toBeGreaterThan(100) // hover: the playhead is under the pointer
   const a = await st(page)
-  await page.mouse.wheel(0, -400) // up
+  await page.mouse.wheel(0, 400) // down
   await expect.poll(async () => (await st(page)).scrollF).toBeGreaterThan(a.scrollF)
   const b = await st(page)
   await expect.poll(async () => (await st(page)).frame).toBe(a.frame + Math.round(b.scrollF - a.scrollF)) // same screen spot, later frame
-  await page.mouse.wheel(0, 400) // down: back
+  await page.mouse.wheel(0, -400) // up: back
   await expect.poll(async () => (await st(page)).scrollF).toBeLessThan(b.scrollF)
 
   const c = await st(page)
@@ -70,7 +70,7 @@ test('재생헤드 고정: right-click menu; the pointer and the wheel leave the
   await page.mouse.move(box.x + await xAt(160), box.y + box.height * 0.5)
   await page.waitForTimeout(150)
   expect((await st(page)).frame).toBe(40) // pinned: the pointer does not move it
-  await page.mouse.wheel(0, -400)
+  await page.mouse.wheel(0, 400)
   await expect.poll(async () => (await st(page)).scrollF).toBeGreaterThan(0)
   expect((await st(page)).frame).toBe(40) // the view moved, the frame stayed
 

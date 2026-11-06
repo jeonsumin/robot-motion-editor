@@ -32,3 +32,17 @@ export function addOverRange(curve: Curve | undefined, fallback: number, r: Rang
   const right = hi < length - 1 ? split(ks, hi + 1)[1] : []
   return { keys: [...left, ...win, ...right] }
 }
+
+/** `curve` with per-frame `deltas` added on frames from … from + deltas.length − 1 (clipped to [0, length − 1]) as linear keys, the
+ *  curve outside unchanged (split exactly at the edges). 발 미끄러짐 추천대로 고치기 (§17): the leg joints' change, on a 수정 층. */
+export function addFrameDeltas(curve: Curve | undefined, fallback: number, from: number, deltas: number[], length: number): Curve {
+  const lo = Math.max(0, from), hi = Math.min(length - 1, from + deltas.length - 1)
+  if (hi < lo) return curve ?? { keys: [] }
+  const ks: Key[] = curve?.keys.length ? curve.keys : [makeKey(0, fallback, 'linear')]
+  const c = { keys: ks }, win: Key[] = []
+  for (let f = lo; f <= hi; f++) win.push(makeKey(f, evalCurve(c, f, fallback) + deltas[f - from], 'linear'))
+  const left = lo > 0 ? split(ks, lo - 1)[0] : []
+  if (left.length) left[left.length - 1] = { ...left.at(-1)!, interp: 'linear' }
+  const right = hi < length - 1 ? split(ks, hi + 1)[1] : []
+  return { keys: [...left, ...win, ...right] }
+}

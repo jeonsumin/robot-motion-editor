@@ -1,8 +1,10 @@
 import { actorOf, clipLocked, editingItem, getEditor, useEditor } from '../store/store'
 import { exportClipCsv } from '../export/csv'
-import { saveCsvFile } from '../fileio'
+import { saveCsvFile, writeTextFiles } from '../fileio'
+import { rlClipExport } from '../export/rlExport'
 import { curveKeyCount, offsetKeyCount } from '../model/itemClip'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { DATA_FPS, parsePlayFps, playTime, PLAY_FPS_MAX, PLAY_FPS_MIN, PLAY_FPS_PRESETS } from '../playClock'
 import { cutAtFrame, sequenceEnd } from '../transport'
 import GraphCanvas from './GraphCanvas'
 import { draggedAsset, dropAssetInClipView, isAssetDrag } from './assetDrop'
@@ -65,6 +67,64 @@ function TimeJump({ frame, end }: { frame: number; end: number }) {
   )
 }
 
+// 재생 fps (user): frames per second the playback runs at (data stays 60 fps). A menu of presets + 직접 입력 (1~240 integer);
+// not 60 = orange, and the wall-clock playback time (frame / fps) shows beside it. Not saved.
+function PlayFps({ frame, end }: { frame: number; end: number }) {
+  const fps = useEditor(s => s.playFps), st = getEditor().getState()
+  const [menu, setMenu] = useState<{ left: number; top: number } | null>(null), [val, setVal] = useState<string | null>(null), [msg, setMsg] = useState('')
+  const btn = useRef<HTMLButtonElement>(null), list = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menu) return
+    list.current?.querySelector<HTMLElement>('[aria-checked=true]')?.focus()
+    const away = (e: Event) => { if (!list.current?.contains(e.target as Node) && e.target !== btn.current) setMenu(null) }
+    document.addEventListener('pointerdown', away); window.addEventListener('resize', away)
+    return () => { document.removeEventListener('pointerdown', away); window.removeEventListener('resize', away) }
+  }, [menu])
+  const pick = (f: number) => { st.setPlayFps(f); setMenu(null); btn.current?.focus() }
+  const opts = PLAY_FPS_PRESETS.includes(fps) ? PLAY_FPS_PRESETS : [...PLAY_FPS_PRESETS, fps] // a typed value shows at the end, checked
+  const go = () => {
+    const f = val === null ? null : parsePlayFps(val)
+    if (f === null) { setMsg(`${PLAY_FPS_MIN}~${PLAY_FPS_MAX} 사이 정수로 입력하세요`); return }
+    st.setPlayFps(f); setVal(null); setMsg('')
+  }
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    const its = [...list.current!.querySelectorAll<HTMLElement>('[role^=menuitem]')], i = its.indexOf(document.activeElement as HTMLElement)
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMenu(null); btn.current?.focus() }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); its[(i + (e.key === 'ArrowDown' ? 1 : its.length - 1)) % its.length]?.focus() }
+    else if (e.key === 'Tab') setMenu(null)
+  }
+  if (val !== null) return (
+    <form className="tl-cutform" role="group" aria-label="재생 fps 입력" onSubmit={ev => { ev.preventDefault(); go() }}>
+      <input autoFocus aria-label="초당 재생 프레임 수" inputMode="numeric" value={val} onChange={ev => { setVal(ev.target.value); setMsg('') }}
+        onKeyDown={ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); setVal(null); setMsg('') } }}
+        onFocus={ev => ev.target.select()} onBlur={() => { setVal(null); setMsg('') }} /><span className="tl-dim">fps</span>
+      {msg && <span className="tl-cutmsg" role="status">{msg}</span>}
+    </form>
+  )
+  return (
+    <>
+      <button ref={btn} className={fps === DATA_FPS ? 'tl-playfps' : 'tl-playfps on'} aria-haspopup="menu" aria-expanded={!!menu}
+        title="초당 재생 프레임 수 — 보는 속도만 바뀌고 데이터·CSV는 60fps 그대로입니다"
+        onClick={() => { if (menu) { setMenu(null); return } const r = btn.current!.getBoundingClientRect(); setMenu({ left: r.left, top: r.bottom + 2 }) }}>
+        재생 {fps}fps <i aria-hidden="true">▾</i>
+      </button>
+      {fps !== DATA_FPS && <span className="tl-playtime" title={`${fps}fps로 재생할 때 실제로 걸리는 시간`}>재생 {playTime(frame, fps)} / {playTime(end, fps)}</span>}
+      {menu && (
+        <div ref={list} role="menu" aria-label="재생 fps" className="tl-menu" style={{ left: menu.left, top: menu.top, minWidth: 110 }} onKeyDown={onMenuKey}>
+          {opts.map(f => (
+            <button key={f} role="menuitemradio" aria-checked={f === fps} tabIndex={-1} className={f === fps ? 'cur' : undefined} onClick={() => pick(f)}>
+              <span className="tl-check" aria-hidden="true">{f === fps ? '✓' : ''}</span>{f}fps{f === DATA_FPS ? ' (원래 속도)' : ''}
+            </button>
+          ))}
+          <button role="menuitem" tabIndex={-1} onClick={() => { setMenu(null); setVal(String(fps)); setMsg('') }}>
+            <span className="tl-check" aria-hidden="true" />직접 입력…
+          </button>
+        </div>
+      )}
+    </>
+  )
+}
+
 // 클립 편집 모드 bar: path back to the sequence, 원본 보기 (held), 겹쳐 보기 (원본 ghost), CSV 저장 (the clip as edited).
 function ClipEditBar({ clipId, name }: { clipId: string; name: string }) {
   const st = getEditor().getState(), overlay = useEditor(s => s.compareOverlay), peek = useEditor(s => s.clipPeek)
@@ -78,6 +138,18 @@ function ClipEditBar({ clipId, name }: { clipId: string; name: string }) {
       setMsg((await saveCsvFile(file, text)) ? 'CSV를 저장했습니다' : '')
     } catch (err) { setMsg(`저장 실패: ${err instanceof Error ? err.message : err}`) }
   }
+  // RL 학습용 저장 (RL팀): the whole clip with its edits, original coordinates, no 기본자세, + edits.json (two downloads)
+  const saveRl = async () => {
+    const s = getEditor().getState()
+    try {
+      const r = rlClipExport(s.project, s.defs, clipId)
+      const err = r.warnings.filter(w => w.kind === 'jointJumpError'), jump = r.warnings.filter(w => w.kind === 'jointJump'), near = jump.filter(w => w.near)
+      if (err.length && !window.confirm(`관절 점프 오류(50 rad/s 초과, IK 해 뒤집힘 의심)가 ${err.length}개 있습니다 (첫 프레임 ${err[0].frame}). 학습할 수 없는 데이터일 수 있습니다. 그래도 저장할까요?`)) return
+      await writeTextFiles(null, [{ name: r.name, text: r.text }, r.json])
+      setMsg(`${r.name}와 edits.json을 내려받았습니다 · 수정 구간 ${r.ranges.length}개`
+        + (jump.length ? ` · 관절 점프 ${jump.length}개${near.length ? ` (이음매 근처 ${near.length}개: 프레임 ${near.slice(0, 3).map(w => w.frame).join(', ')}${near.length > 3 ? '…' : ''})` : ''}` : ''))
+    } catch (err) { setMsg(`저장 실패: ${err instanceof Error ? err.message : err}`) }
+  }
   const hold = (on: boolean) => () => st.setClipPeek(on)
   return (
     <span className="tl-crumb tl-clipedit" role="group" aria-label="클립 편집">
@@ -88,6 +160,7 @@ function ClipEditBar({ clipId, name }: { clipId: string; name: string }) {
         title="누르고 있는 동안 수정 전 원본을 보여 줍니다">원본 보기</button>
       <button aria-pressed={overlay} onClick={() => st.setCompareOverlay(!overlay)} title="수정 전 원본을 반투명으로 겹쳐 보여 줍니다">겹쳐 보기</button>
       {draft && <button onClick={() => st.cancelDraftClip()} title="라이브러리 미리보기에서 넣은 이 클립을 목록에서 빼고 나갑니다 (실행취소로 되돌릴 수 있음)">추가 취소</button>}
+      <button onClick={saveRl} title="RL 학습용: 수정이 반영된 전체 CSV를 원본 좌표 그대로(이동·회전 없음) 저장하고, 수정한 프레임 구간 edits.json을 함께 내려받습니다">RL 학습용 저장</button>
       <button className="tl-primary" onClick={saveCsv} title="수정한 클립을 CSV로 저장합니다 (기본자세·리드인 없이, 루트 로컬)">CSV 저장</button>
       {msg && <span className="tl-cutmsg" role="status">{msg}</span>}
     </span>
@@ -116,6 +189,7 @@ function TimelineHeader() {
       </button>
       <TimeJump frame={frame} end={shownEnd} />
       <span className="tl-fps">60 fps</span>
+      <PlayFps frame={frame} end={shownEnd} />
       <span className="tl-sep" aria-hidden="true" />
       <CutControl disabled={clipView} />
       <span className="tl-seg" role="group" aria-label="클립 보기" title={clipView ? '클립 보기 방식 (Tab)' : '클립을 열면 고를 수 있습니다'}>

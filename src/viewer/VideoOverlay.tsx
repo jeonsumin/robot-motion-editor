@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { mediaUrl, subscribeMedia } from '../media/registry'
 import { videoTimeAt, videoTrack } from '../model/video'
 import { getEditor, useEditor } from '../store/store'
-import { syncAction } from './videoSync'
+import { MIN_VIDEO_RATE, syncAction } from './videoSync'
 
 // Single muted <video> kept on the playhead's media time. Visible only via CSS class (mode); hidden + paused when no target.
 export default function VideoOverlay() {
@@ -22,14 +22,16 @@ export default function VideoOverlay() {
       if (!t || !url) { v.pause(); return }
       if (v.getAttribute('src') !== url) { v.src = url; return } // loadedmetadata re-runs sync
       if (v.readyState < 1) return
-      const a = syncAction(t, v, s.playing)
+      const rate = s.playFps / 60, live = s.playing && rate >= MIN_VIDEO_RATE // 재생 fps: same speed; too slow for <video> = seek per frame
+      if (live && v.playbackRate !== rate) v.playbackRate = rate
+      const a = syncAction(t, v, live, rate)
       if (a.kind === 'seek') v.currentTime = a.t
       if (a.play) { if (v.paused) v.play().catch(() => {}) } else if (!v.paused) v.pause()
     }
     run()
     v.addEventListener('loadedmetadata', run)
     const un1 = store.subscribe((s, p) => {
-      if (s.frame !== p.frame || s.playing !== p.playing || s.project !== p.project || s.editing !== p.editing || s.videoMode !== p.videoMode) run()
+      if (s.frame !== p.frame || s.playing !== p.playing || s.project !== p.project || s.editing !== p.editing || s.videoMode !== p.videoMode || s.playFps !== p.playFps) run()
     })
     const un2 = subscribeMedia(run)
     return () => { v.pause(); v.removeEventListener('loadedmetadata', run); un1(); un2() }

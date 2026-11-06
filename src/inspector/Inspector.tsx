@@ -3,6 +3,9 @@ import { stageOf } from '../model/defaults'
 import { curveKeyCount, offsetKeyCount } from '../model/itemClip'
 import { actorOf, clipLocked, editLock, editTarget, getEditor, targetItem, trackLocked, useEditor } from '../store/store'
 import JointPanel from '../viewer/JointPanel'
+import { sortedItems } from '../model/sequence'
+import type { Item, Project } from '../model/types'
+import { WalkInspector } from './WalkPanel'
 
 const ROOT = ['root.x', 'root.y', 'root.z', 'root.roll', 'root.pitch', 'root.yaw']
 
@@ -27,9 +30,21 @@ function StageSection() {
   )
 }
 
+// 걷기 조각 (§20) of this actor's track: the selected one, else (when no clip piece is the target) the one at the playhead
+function walkItem(project: Project, actorId: string, frame: number, selItem: string | null, fallback: boolean): Item | null {
+  const track = project.sequence.tracks.find(t => t.kind === 'motion' && t.actorId === actorId)
+  if (!track) return null
+  const picked = track.items.find(i => i.id === selItem)
+  if (picked?.walk) return picked
+  if (!fallback) return null
+  const items = sortedItems(track)
+  const at = items.filter(i => frame >= i.start && frame < i.start + (i.trimOut - i.trimIn)).at(-1) ?? items.filter(i => i.start <= frame).at(-1)
+  return at?.walk ? at : null
+}
+
 export default function Inspector() {
   const ed = getEditor()
-  const { project, frame, sel, editing, clipEdit } = useEditor(s => s)
+  const { project, frame, sel, editing, clipEdit, selItem } = useEditor(s => s)
   const [lenMsg, setLenMsg] = useState(false)
   const [tol, setTol] = useState(0.001)
   const [simpMsg, setSimpMsg] = useState<{ n: number; at: number } | null>(null)
@@ -39,6 +54,18 @@ export default function Inspector() {
   const clipMode = !!clipEdit // 클립 편집 모드: the open clip on its virtual actor
 
   const target = editTarget({ project, frame, editing, clipEdit }, actor.id)
+  const walk = clipMode ? null : walkItem(project, actor.id, frame, selItem, !target)
+  if (walk) return (
+    <div className="insp">
+      <div className="insp-head">
+        <span className="insp-swatch" style={{ background: actor.color }} aria-hidden="true" />
+        <b className="insp-title">{actor.name}</b>
+        <span className="pp-tag">GO2</span>
+      </div>
+      <WalkInspector key={walk.id} item={walk} />
+      <StageSection />
+    </div>
+  )
   if (!target) return <div className="insp"><p className="insp-hint">이 액터에 클립이 없습니다.</p><StageSection /></div>
   const { clipId } = target
   const clip = project.clips[clipId]

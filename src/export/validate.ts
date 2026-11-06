@@ -3,10 +3,11 @@ import { quatAngle } from '../model/rootMath'
 import type { RobotDef } from '../robot/types'
 
 export interface Warning {
-  kind: 'jointLimit' | 'jointVelocity' | 'rootJump' | 'gap' | 'physicsAssist'
+  kind: 'jointLimit' | 'jointVelocity' | 'rootJump' | 'gap' | 'physicsAssist' | 'jointJump' | 'jointJumpError' // jointJump*: RL 학습용 only (rlExport)
   frame: number
   channel: string
   message: string
+  near?: boolean // jointJump*: within ±0.4 s of an edit range boundary (stressed in the list)
 }
 
 const FPS = 60

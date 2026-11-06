@@ -13,6 +13,10 @@ const WARN = { q: 45 * Math.PI / 180, z: 0.05 } // a gap this big (sitting end �
 
 export interface Seam { n: number; d0: Record<string, number>; v0: Record<string, number>; warn: boolean }
 
+/** GO2 발 걸음 이음매 (§19, model/transition.ts) at the start of `it`: the piece's own switch, else the project's default (off). */
+export const stepOn = (p: Project, it: Item) => it.step ?? p.stepSeam === true
+const SAME = 1e-6 // rad / m: a boundary whose two frames are equal (Go2 editor blocks share their boundary frame)
+
 export const seamLen = (it: Item) => Math.min(Math.max(Math.round(it.seam ?? SEAM_DEFAULT), 0), SEAM_MAX, itemLen(it))
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a))
 
@@ -26,7 +30,7 @@ export function seamOf(p: Project, defs: RobotDefs, it: Item, base: Clip, prevCl
   if (!prev || !a || !n) return null
   const def = defs.go2, e = prev.trimOut - 1, t0 = it.trimIn
   const d0: Record<string, number> = {}, v0: Record<string, number> = {}
-  let warn = false
+  let warn = false, same = true
   for (const ch of [...SEAM_ROOT, ...def.joints.map(j => j.name)]) {
     const fb = ch === 'root.z' ? def.standingHeight : 0, A = a.channels[ch] ?? { keys: [] }, B = base.channels[ch] ?? { keys: [] }
     const ae = evalCurve(A, e, fb), va = itemLen(prev) > 1 ? ae - evalCurve(A, e - 1, fb) : 0
@@ -34,8 +38,10 @@ export function seamOf(p: Project, defs: RobotDefs, it: Item, base: Clip, prevCl
     const ang = ch === 'root.roll' || ch === 'root.pitch'
     d0[ch] = ang ? wrap(ae + va - b0) : ae + va - b0 // B's first frame: A's last one frame on at its speed
     v0[ch] = va - vb
+    if (Math.abs(ang ? wrap(ae - b0) : ae - b0) > SAME) same = false
     if (Math.abs(d0[ch]) > (ch === 'root.z' ? WARN.z : WARN.q)) warn = true
   }
+  if (same && stepOn(p, it)) return null // 경계 프레임이 같음 (S7): already joined, the seam would only push it a frame off
   return { n, d0, v0, warn }
 }
 

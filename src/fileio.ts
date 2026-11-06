@@ -21,7 +21,7 @@ export async function writeTextFiles(
       const w = await (await dir.getFileHandle(name, { create: true })).createWritable()
       await w.write(text)
       await w.close()
-    } else downloadBlob(name, new Blob([text], { type: 'text/csv' }))
+    } else downloadBlob(name, new Blob([text], { type: /\.json$/i.test(name) ? 'application/json' : 'text/csv' }))
   }
 }
 

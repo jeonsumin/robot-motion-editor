@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { trackDrag } from './drag'
 import { getEditor, useEditor } from '../store/store'
 import { itemLen, sortedItems, pieceName, pieceTag, projectTitle } from '../model/sequence'
 import { BLEND_RANGE, HOLD_RANGE, INERTIA_CAP, itemLead, itemTail, previewRange, REST_BLEND, REST_HOLD } from '../model/restPose'
 import { SEAM_MAX } from '../model/seam'
 import type { Item, Track } from '../model/types'
-import { itemSeam, offsetKeyCount } from '../model/itemClip'
+import { boundaryStep, itemSeam, offsetKeyCount, walkOf } from '../model/itemClip'
+import type { WalkReport } from '../model/walk'
+import { prevTouching, stepText } from '../model/transition'
+import { BRIDGE_NAME, bridgeFor, type BridgeKind } from '../model/bridge'
 import { seqFlash, seqFocus, tv } from './viewState'
 import { edgeScroll, followStep, markHover, markUserScroll, resetFollow, wheelFrames } from './follow'
 import { sequenceEnd } from '../transport'
@@ -17,6 +20,7 @@ import { mediaUrl, subscribeMedia } from '../media/registry'
 import { exportOne } from '../export/exportOne'
 import { formatTimecode, frameToX, hoverFrame, hoverScrub, xToFrame, type TimeScale } from './timeScale'
 import { usePhysics } from '../physics/physicsStore'
+import { resolvedKey, useReview } from '../review/reviewState'
 import { runItems, stale } from '../physics/runItem'
 import { withDefaults } from '../physics/settings'
 import { badge, drawAssist, segmentAt, seqFrameOf, treeSuffix, treeTag, DIM, WARN_RED } from './physGraph'
@@ -30,6 +34,7 @@ const LOCKED = '잠긴 트랙입니다'
 type LenKey = 'restHold' | 'restBlend' | 'inertia' | 'tailBlend' | 'tailHold' | 'seam'
 const LEN_NAME: Record<LenKey, string> = { restHold: '기본자세', restBlend: '전이', inertia: '관성', tailBlend: '끝 전이', tailHold: '끝 기본자세', seam: '이음' }
 const SEAM_WARN = '이음 ⚠: 앞 조각 끝 자세와 차이가 커서 이어지는 동작이 어색할 수 있습니다'
+const STEP_OK = '#3FB950', STEP_WARN = '#F0883E' // 발 걸음 이음매 marks: 초록 적용 · 주황 조건 못 맞춤 (빨강 = WARN_RED, 회색 = DIM)
 const ICON_HIT = 18 // hit area; icons are drawn 14px: (motion) path, eye, padlock at the label column's right edge
 const TRAIL_X = LABEL_W - 56, EYE_X = LABEL_W - 36, LOCK_X = LABEL_W - 16, PLAY_X = EYE_X - 20 // PLAY_X: piece lanes, left of the eye
 const TRI_W = 18, NAME_X = 20, CHILD_X = NAME_X + 16 // disclosure triangle hit width; track / child label x
@@ -69,6 +74,11 @@ const restTag = (it: Item) => it.restPose === 'prepend' ? '기본자세 덧붙�
 const childLabel = (t: Track, it: Item, name: string) => `${pieceTag(t, it).split(' · ')[0]}${pieceTag(t, it) ? ' · ' : ''}${formatTimecode(it.start)}–${formatTimecode(it.start + itemLen(it))} · ${name}${it.restPose ? ` · ${restTag(it)}` : ''}`
 // short lane label: "#n · m:ss" of the piece start ("m:ss" alone for a clip's only piece); exact times are in the hover text
 const mss = (f: number) => { const t = Math.floor(f / 60); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` }
+// 걷기 조각 (§20): what the bar says and its state
+const WALK_TONE: Record<WalkReport['tone'], string> = { ok: '정상', warn: '주의', bad: '한계 초과' }
+const walkLabel = (r: WalkReport) => `🚶 걷기 ${r.dist.toFixed(2)} m · ${r.secs.toFixed(1)}초 · ${r.speed.toFixed(2)} m/s${r.held ? ' · 한계 초과: 서서 멈춤' : ''}`
+const walkTip = (r: WalkReport) => `\n걷기: ${WALK_TONE[r.tone]}${r.reasons.map(x => `\n· ${x.text}`).join('')}${r.slowFix ? `\n→ ${r.slowFix}` : ''}`
+  + (r.held ? '\n자세가 무너지지 않게 걷지 않고 서 있음 — 인스펙터에서 고치기 (고치기 전에는 내보내지 않음)' : '')
 const laneLabel = (t: Track, it: Item) => `${pieceTag(t, it).split(' · ')[0]}${pieceTag(t, it) ? ' · ' : ''}${mss(it.start)}`
 // text cut to `w` px with an ellipsis
 function fit(ctx: CanvasRenderingContext2D, text: string, w: number) {
@@ -170,6 +180,15 @@ export default function SequenceCanvas() {
     const tailOf = (it: Item) => { const s = ed.getState(), d = dragged(it); if (d) return itemTail(s.project, s.defs, d); if (!s.inGesture || !tails.has(it.id)) tails.set(it.id, itemTail(s.project, s.defs, it)); return tails.get(it.id)! }
     const seams = new Map<string, ReturnType<typeof itemSeam>>() // GO2 이음매 보정 at a piece's start
     const seamOf = (it: Item) => { const s = ed.getState(), d = dragged(it); if (d) return itemSeam(s.project, s.defs, d); if (!s.inGesture || !seams.has(it.id)) seams.set(it.id, itemSeam(s.project, s.defs, it)); return seams.get(it.id)! }
+    const steps = new Map<string, ReturnType<typeof boundaryStep>>() // GO2 발 걸음 이음매 at a piece's start (§19): its mark
+    const stepOf = (it: Item) => { const s = ed.getState(); if (!s.inGesture || !steps.has(it.id)) steps.set(it.id, boundaryStep(s.project, s.defs, it)); return steps.get(it.id)! }
+    // a 걷기 piece's edit refused (§22): why, and the shortest length when its end was dragged
+    const walkDeny = (it: Item, mode: string, df: number) => {
+      if (mode === 'move') return `${DENY} (겹치거나 걷기가 한계 초과가 됨)`
+      const pv = ed.getState().previewWalk(it.id, { frames: it.trimOut - it.trimIn + df })
+      return pv?.report.tone === 'bad' ? `걷기 한계 초과 — ${pv.minFrames ? `최소 ${(pv.minFrames / 60).toFixed(1)}초` : '시간으로는 못 고침'} (인스펙터에서 고치기)` : DENY
+    }
+    const walkRep = (it: Item) => { if (!it.walk) return null; const s = ed.getState(); return walkOf(s.project, s.defs, it)?.report ?? null } // cached per project
     seqFlash.fn = (text, itemId) => flash(text, layout().findIndex(r => !r.it && r.t.items.some(i => i.id === itemId)))
 
     const draw = () => {
@@ -222,6 +241,17 @@ export default function SequenceCanvas() {
           if (sm) { // 이음매 보정: the first frames of the piece, eased from the piece before
             ctx.globalAlpha = 0.45 * ga; ctx.fillStyle = sm.warn ? WARN_RED : C.blend; ctx.fillRect(x, by, sm.n * tv.ppf, lane ? bh : 4); ctx.globalAlpha = ga
           }
+          const bs = video ? null : stepOf(it)
+          if (bs) { // 발 걸음 이음매 mark at the piece's start: 초록 applied · 주황 not within the limits · 빨강 shown only · 회색 same frames
+            const tone = stepText(bs.status).tone
+            ctx.fillStyle = tone === 'ok' ? STEP_OK : tone === 'warn' ? STEP_WARN : tone === 'bad' ? WARN_RED : DIM
+            ctx.globalAlpha = ga; ctx.fillRect(Math.round(x) - 1, by, 4, bh); ctx.fillRect(Math.round(x) - 1, by, 11, 5)
+          }
+          const wr = video ? null : walkRep(it)
+          if (wr) { // 걷기 상태 (§20) at the piece's start: 초록 정상 · 주황 주의 · 빨강 한계 초과 (made either way)
+            ctx.fillStyle = wr.tone === 'ok' ? STEP_OK : wr.tone === 'warn' ? STEP_WARN : WARN_RED
+            ctx.globalAlpha = ga; ctx.fillRect(Math.round(x) - 1, by, 4, bh); ctx.fillRect(Math.round(x) - 1, by, 11, 5)
+          }
           const tl = tailOf(it)
           if (tl) { // 끝 기본자세 after the piece's end: 전이 then 기본자세 (정지); one row: a strip, so the next piece stays visible
             ctx.globalAlpha = 0.55 * ga
@@ -235,6 +265,15 @@ export default function SequenceCanvas() {
             if (lane && fs.length) { const a = Math.min(...fs), b = Math.max(...fs) + 1; ctx.globalAlpha = 0.3 * ga; ctx.fillRect(frameToX(sc, it.start + a - it.trimIn), by, (b - a) * tv.ppf, bh) }
             ctx.globalAlpha = ga
             for (const f of fs) ctx.fillRect(Math.round(frameToX(sc, it.start + f - it.trimIn)) - 1, by + bh - 4, 2, 4)
+          }
+          if (!video && s.project.review) { // 검수 판정 (§13) on this piece's clip frames: a strip along the bar's top edge — red 문제 있음, grey 안무여서 놔둠 / 해결됨
+            const res = useReview.getState().resolved
+            for (const v of s.project.review) {
+              if (v.clipId !== it.refId || v.to < it.trimIn || v.from >= it.trimOut) continue
+              const a = Math.max(v.from, it.trimIn), b = Math.min(v.to, it.trimOut - 1) + 1, xa = frameToX(sc, it.start + a - it.trimIn)
+              ctx.fillStyle = v.verdict === 'bad' && !res.has(resolvedKey(v)) ? WARN_RED : DIM
+              ctx.fillRect(Math.round(xa) - 1, by, Math.max((b - a) * tv.ppf, 3), 4)
+            }
           }
           if (video && !mediaUrl(it.refId)) hatch(x, x + w, y, 0.25) // offline
           ctx.strokeStyle = it.id === s.selItem ? C.accent : video ? C.line : color; ctx.lineWidth = 1
@@ -274,7 +313,9 @@ export default function SequenceCanvas() {
             ctx.fillText(b, br - bw + 8, ty); ctx.fillStyle = C.text
           }
           const nr = bw ? br - bw : right
-          if (nr > x) ctx.fillText((video ? refName(it) : pieceName(t, it, ed.getState().project.clips[it.refId], projectTitle(ed.getState().fileName)) + (hasEdit(it) ? ' · 수정됨' : '')) + (video && !mediaUrl(it.refId) ? ' (오프라인)' : ''), x, ty, nr - x)
+          const wl = video ? null : walkRep(it)
+          if (nr > x && wl) ctx.fillText(walkLabel(wl), x + 6, ty, nr - x - 6) // past the state mark
+          else if (nr > x) ctx.fillText((video ? refName(it) : pieceName(t, it, ed.getState().project.clips[it.refId], projectTitle(ed.getState().fileName)) + (hasEdit(it) ? ' · 수정됨' : '')) + (video && !mediaUrl(it.refId) ? ' (오프라인)' : ''), x, ty, nr - x)
         }
         ctx.restore()
       }
@@ -362,7 +403,7 @@ export default function SequenceCanvas() {
     }
     resetFollow()
     const ro = new ResizeObserver(resize); ro.observe(canvas); resize()
-    const unsub = ed.subscribe(schedule), unsubMedia = subscribeMedia(schedule), unsubPhys = usePhysics.subscribe(schedule)
+    const unsub = ed.subscribe(schedule), unsubMedia = subscribeMedia(schedule), unsubPhys = usePhysics.subscribe(schedule), unsubReview = useReview.subscribe(schedule)
     document.fonts?.addEventListener('loadingdone', schedule) // labels drawn in the fallback font before IBM Plex arrived
 
     // ---- mouse ----
@@ -527,7 +568,7 @@ export default function SequenceCanvas() {
         if (df === 0 && r?.it) st.openItemPreview(it.id, true) // a click on a lane bar also previews (and plays) that piece
         if (df !== 0) {
           const ok = mode === 'move' ? st.moveItem(it.id, Math.max(0, it.start + df)) : st.trimItem(it.id, mode, df)
-          if (!ok) flash(t.locked ? LOCKED : DENY, row)
+          if (!ok) flash(t.locked ? LOCKED : it.walk ? walkDeny(it, mode, df) : DENY, row)
         }
         schedule()
       }, () => { drag = null; schedule() })
@@ -602,9 +643,10 @@ export default function SequenceCanvas() {
     const laneTip = (t: Track, it: Item) => {
       const s = ed.getState(), { st, old } = phys(t, it), ld = it.restPose === 'prepend' ? leadOf(it) : null
       return childLabel(t, it, s.project.clips[it.refId]?.name ?? '') + treeSuffix(st, old).replace(/^ · /, '\n물리 검증: ')
-        + (ld?.why === 'review' ? '\n관성 검토 필요' : '') + (seamOf(it)?.warn ? `\n${SEAM_WARN}` : '') + (it.restTail ? '\n끝 기본자세 (전이 · 정지 0.5초)' : '') + (hasEdit(it) ? `\n수정됨 · 수정 키 ${offsetKeyCount(it)}개 (클립 프리뷰에서 고침 · 우클릭: 수정 지우기)` : '')
+        + (ld?.why === 'review' ? '\n관성 검토 필요' : '') + (seamOf(it)?.warn ? `\n${SEAM_WARN}` : '') + stepTip(it) + (walkRep(it) ? walkTip(walkRep(it)!) : '') + (it.restTail ? '\n끝 기본자세 (전이 · 정지 0.5초)' : '') + (hasEdit(it) ? `\n수정됨 · 수정 키 ${offsetKeyCount(it)}개 (클립 프리뷰에서 고침 · 우클릭: 수정 지우기)` : '')
         + (it.id === s.itemPreview ? '\n클립 프리뷰에서 보는 중' : '')
     }
+    const stepTip = (it: Item) => { const bs = stepOf(it); if (!bs) return ''; const t = stepText(bs.status); return `\n발 걸음 이음매: ${t.label}${t.detail ? ` (${t.detail})` : ''}` }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       markUserScroll()
@@ -616,7 +658,7 @@ export default function SequenceCanvas() {
       } else if (e.shiftKey || x < LABEL_W || (x >= W - SB_W && y >= RULER_H && !!sbar())) { // rows: Shift + wheel, or over the labels / scrollbar; eased in draw (nothing moves when they fit)
         const d = e.shiftKey ? e.deltaY || e.deltaX : e.deltaY
         scrollTo = Math.min(Math.max(scrollTo + (e.deltaMode === 1 ? d * ROW_H : d), 0), maxScroll())
-      } else { // 휠 = 구간 이동 (user): up = later, down = earlier; the playhead keeps following the pointer unless 고정
+      } else { // 휠 = 구간 이동 (user): down = later, up = earlier; the playhead keeps following the pointer unless 고정
         tv.scrollF = Math.max(0, tv.scrollF + wheelFrames(e, tv.ppf))
         const f = y < H - MM_H ? hoverFrame(x, LABEL_W, scale(), hoverOff()) : null
         if (f !== null) hover.push(Math.max(0, f))
@@ -676,7 +718,7 @@ export default function SequenceCanvas() {
     addEventListener('dragend', clearGhost)
     return () => {
       seqFlash.fn = null; seqFocus.fn = null
-      ro.disconnect(); document.fonts?.removeEventListener('loadingdone', schedule); unsub(); unsubMedia(); unsubPhys(); hover.stop(); edge.stop(); cancelAnimationFrame(raf); clearTimeout(timer)
+      ro.disconnect(); document.fonts?.removeEventListener('loadingdone', schedule); unsub(); unsubMedia(); unsubPhys(); unsubReview(); hover.stop(); edge.stop(); cancelAnimationFrame(raf); clearTimeout(timer)
       canvas.removeEventListener('mousedown', onDown)
       canvas.removeEventListener('mousemove', onMove)
       canvas.removeEventListener('mouseleave', onLeave)
@@ -698,9 +740,15 @@ export default function SequenceCanvas() {
     setRename(null)
   }
   const closeCtx = (refocus: boolean) => { setCtx(null); setPh(null); if (refocus) cv.current?.focus() }
-  useEffect(() => {
+  useLayoutEffect(() => { // before paint: the menu never shows where it runs over the window
     if (!ctx && !ph) return
-    menuRef.current?.querySelector<HTMLElement>('[role=menuitem]')?.focus()
+    const m = menuRef.current
+    if (m) { // keep the whole menu in the window (the 발 걸음 이음매 part makes it tall): up / left by what runs over
+      const r = m.getBoundingClientRect()
+      if (r.bottom > window.innerHeight - 4) m.style.top = `${Math.max(4, window.innerHeight - 4 - r.height)}px`
+      if (r.right > window.innerWidth - 4) m.style.left = `${Math.max(4, window.innerWidth - 4 - r.width)}px`
+    }
+    menuRef.current?.querySelector<HTMLElement>('[role^=menuitem]')?.focus()
     const away = (e: Event) => { if (!menuRef.current?.contains(e.target as Node)) { setCtx(null); setPh(null) } }
     document.addEventListener('pointerdown', away); document.addEventListener('wheel', away, true); document.addEventListener('scroll', away, true)
     return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('wheel', away, true); document.removeEventListener('scroll', away, true) }
@@ -718,18 +766,62 @@ export default function SequenceCanvas() {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeCtx(true) } else if (e.key === 'Tab') closeCtx(true)
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
-      const its = [...menuRef.current!.querySelectorAll<HTMLElement>('[role=menuitem]')], i = its.indexOf(document.activeElement as HTMLElement)
+      const its = [...menuRef.current!.querySelectorAll<HTMLElement>('[role^=menuitem]')], i = its.indexOf(document.activeElement as HTMLElement)
       its[(i + (e.key === 'ArrowDown' ? 1 : its.length - 1)) % its.length]?.focus()
     }
   }
   // a robot is known to have no physics model once one of its items came back 미지원
-  const robotOf = (actorId?: string) => project.actors.find(a => a.id === actorId)?.robot
+  function robotOf(actorId?: string) { return project.actors.find(a => a.id === actorId)?.robot }
   const noModel = !!ctx && project.sequence.tracks.some(t => robotOf(t.actorId) === robotOf(ctx.actorId) && t.items.some(i => byItem[i.id]?.message === '미지원'))
   const runPhys = (c: Ctx) => {
     const t = project.sequence.tracks.find(t => t.id === c.trackId)
     if (t) void runItems((c.itemId ? [c.itemId] : sortedItems(t).map(i => i.id)).map(itemId => ({ actorId: c.actorId, itemId })))
   }
   const ctxItem = ctx?.itemId ? project.sequence.tracks.find(t => t.id === ctx.trackId)?.items.find(i => i.id === ctx.itemId) ?? null : null
+  // 발 걸음 이음매 (§19): GO2 only; the piece's own switch where it starts right after another piece, the project default on any GO2 menu
+  const go2Menu = !!ctx && robotOf(ctx.actorId) === 'go2'
+  const ctxStep = go2Menu && ctxItem && prevTouching(project, ctxItem) ? boundaryStep(project, getEditor().getState().defs, ctxItem) : null
+  const stepHead = ctxStep && stepText(ctxStep.status)
+  const setStep = (on: boolean | null) => { closeCtx(false); if (!getEditor().getState().setItemStep(ctxItem!.id, on)) seqFlash.fn?.(LOCKED, ctxItem!.id) }
+  // 수동 전이 조각 (시간 추가): made when the menu opens, so it can say how much later the pieces after it will start
+  const walkPrev = !!ctxItem?.walk && sortedItems(project.sequence.tracks.find(t => t.items.some(i => i.id === ctxItem.id))!).indexOf(ctxItem) > 0 // 걷기: any piece before it
+  const bridgeKey = go2Menu && ctxItem && (ctxItem.walk ? walkPrev : prevTouching(project, ctxItem)) ? ctxItem.id : null
+  const bridges = useMemo(() => bridgeKey ? (['step', 'stand'] as const).map(k => [k, bridgeFor(project, getEditor().getState().defs, bridgeKey, k)] as const)
+    .filter(([, r]) => r || !ctxItem?.walk) : [], [bridgeKey, project]) // eslint-disable-line react-hooks/exhaustive-deps -- before a 걷기 piece: 기본서기 경유 only
+  const addBridge = (kind: BridgeKind, r: ReturnType<typeof bridgeFor>) => {
+    closeCtx(false)
+    if (!r || !('clip' in r)) return
+    const sec = (r.clip.length / 60).toFixed(1)
+    seqFlash.fn?.(getEditor().getState().insertBridge(ctxItem!.id, r.clip) ? `${BRIDGE_NAME[kind]} ${sec}초를 넣고 뒤 조각을 ${sec}초 밀었습니다 (되돌리기 Ctrl+Z)` : LOCKED, ctxItem!.id)
+  }
+  const bridgeItems = bridges.map(([kind, r]) => {
+    const ok = !!r && 'clip' in r, why = r && !('clip' in r) ? stepText(r.status) : null
+    return <button key={kind} role="menuitem" tabIndex={-1} aria-disabled={!ok}
+      title={ok ? `${BRIDGE_NAME[kind]}를 이 조각 앞에 넣습니다. 이 조각과 뒤 조각들이 그만큼 늦게 시작합니다 (시간이 늘어남)` : `만들 수 없음: ${why?.label ?? ''}${why?.detail ? ` — ${why.detail}` : ''}`}
+      onClick={() => { if (ok) addBridge(kind, r) }}>
+      <span className="tl-check" aria-hidden="true" />{BRIDGE_NAME[kind]} 넣기 {ok ? `— 뒤 조각 ${((r as { clip: { length: number } }).clip.length / 60).toFixed(1)}초 밀림` : '(만들 수 없음)'}</button>
+  })
+  const ctxWalk = ctxItem?.walk ? walkOf(project, getEditor().getState().defs, ctxItem)?.report ?? null : null
+  const stepItems = go2Menu && ctxItem && ctxItem.walk ? (walkPrev || ctxWalk?.tone === 'bad') && <>
+    <div className="tl-menu-head tl-menu-sep" role="presentation">
+      <div>걷기 (이 조각)</div>
+      {ctxWalk && <><div className={`tl-step ${ctxWalk.tone}`}>{WALK_TONE[ctxWalk.tone]}{ctxWalk.held ? ' — 서서 멈춤' : ''}</div>{ctxWalk.reasons.map((r, i) => <div key={i}>{r.text}</div>)}</>}
+    </div>
+    {bridgeItems}
+  </> : go2Menu && ctxItem && prevTouching(project, ctxItem) ? <>
+    <div className="tl-menu-head tl-menu-sep" role="presentation">
+      <div>발 걸음 이음매 (이 조각 시작)</div>
+      {stepHead ? <><div className={`tl-step ${stepHead.tone}`}>{stepHead.label}</div>{stepHead.detail && <div>{stepHead.detail}</div>}</> : <div>꺼짐</div>}
+    </div>
+    {([[true, '켜기'], [false, '끄기'], [null, `기본값 따르기 (${project.stepSeam ? '켜짐' : '꺼짐'})`]] as const).map(([v, label]) => (
+      <button key={String(v)} role="menuitemradio" aria-checked={(ctxItem.step ?? null) === v} tabIndex={-1} className={(ctxItem.step ?? null) === v ? 'cur' : ''}
+        onClick={() => setStep(v)}><span className="tl-check" aria-hidden="true">{(ctxItem.step ?? null) === v ? '✓' : ''}</span>{label}</button>))}
+    {bridgeItems}
+  </> : null
+  const stepDefault = go2Menu ? <button role="menuitemcheckbox" aria-checked={!!project.stepSeam} tabIndex={-1}
+    title="이 프로젝트의 GO2 블록 경계 전체에 발 걸음 이음매를 기본으로 켜고 끕니다 (조각마다 따로 정한 것은 그대로)"
+    onClick={() => { closeCtx(false); getEditor().getState().setStepSeam(!project.stepSeam) }}>
+    <span className="tl-check" aria-hidden="true">{project.stepSeam ? '✓' : ''}</span>발 걸음 이음매 기본값 (프로젝트)</button> : null
   const rows = project.sequence.tracks.filter(t => t.kind === 'motion' || (isVideo(t) && project.media.length > 0))
   return (
     <div className="tl-body">
@@ -761,12 +853,14 @@ export default function SequenceCanvas() {
       {!rows.length && <div className="seq-empty">CSV 가져오기로 모션을 불러오세요</div>}
       {ctx && (
         <div ref={menuRef} role="menu" aria-label="클립" className="tl-menu" style={{ left: ctx.x, top: ctx.y }} onKeyDown={menuKeys}>
-          {ctx.itemId && <button role="menuitem" tabIndex={-1} onClick={() => { closeCtx(false); void runExport(ctx) }}>export하기</button>}
+          {ctx.itemId && <button role="menuitem" tabIndex={-1} onClick={() => { closeCtx(false); void runExport(ctx) }}>CSV 내보내기</button>}
           {ctxItem && hasEdit(ctxItem) && <button role="menuitem" tabIndex={-1} title="이 조각의 수정을 모두 지우고 원본 클립대로 되돌립니다"
             onClick={() => { closeCtx(false); if (!getEditor().getState().clearOffset(ctxItem.id)) seqFlash.fn?.(LOCKED, ctxItem.id) }}>수정 지우기</button>}
           <button role="menuitem" tabIndex={-1} aria-disabled={noModel} title={noModel ? '미지원' : undefined}
             onClick={() => { if (noModel) return; closeCtx(false); runPhys(ctx) }}>{ctx.itemId ? '물리 검증' : '트랙 물리 검증'}</button>
           {pinItem}
+          {stepItems}
+          {stepDefault}
         </div>
       )}
       {ph && !ctx && (

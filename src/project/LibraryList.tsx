@@ -5,11 +5,13 @@ import { buildBlockClip, emptyClipFor } from '../go2blocks/build'
 import { getEditor, trackLocked, useEditor } from '../store/store'
 import { dropAsset, setDragged } from '../timeline/assetDrop'
 import { RowMenu, type Entry as MenuEntry } from './AssetList'
+import { WalkAddPanel } from '../inspector/WalkPanel'
 
 const KIND = { fixed: '고정', meters: '거리', degrees: '각도', empty: '길이' } as const
 export const filterBlocks = (query: string) => { const q = query.trim().toLowerCase(); return GO2_BLOCKS.filter(b => b.label.toLowerCase().includes(q)) }
 
-type Entry = { kind: 'dir'; key: string; name: string; n: number; open: boolean } | { kind: 'block'; key: string; b: Block; inDir: boolean }
+type Entry = { kind: 'dir'; key: string; name: string; n: number; open: boolean } | { kind: 'block'; key: string; b: Block; inDir: boolean } | { kind: 'walk'; key: string }
+const WALK_ROW = 'walk', WALK_LABEL = '걷기 (가상)' // §20: a made walk, not a logged block
 
 /** 라이브러리 tab: the GO2 blocks by folder (public/go2-blocks/<folder>, folded until opened; a name filter opens the folders it hits),
  * Empty on top; the picked block's input below. Fixed blocks drag to the timeline once loaded. */
@@ -25,12 +27,14 @@ export default function LibraryList({ query }: { query: string }) {
   const fallback = (go2s.find(a => a.id === selGo2) ?? go2s[0])?.id ?? 'new'
   const t = choice === 'new' || choice === 'asset' || go2s.some(a => a.id === choice) ? choice! : fallback // a vanished actor falls back
   const target = t === 'new' ? null : t
+  const walkTo = t === 'asset' ? fallback : t // a walk goes on a track (no 목록에만)
   const [open, setOpen] = useState<Set<string>>(new Set())
   // a loop block's chosen step value, per block: the 설정 칸 and the right-click menu add the same one (none yet = the smallest)
   const [values, setValues] = useState<Record<string, string>>({})
   const [menu, setMenu] = useState<{ b: Block; x: number; y: number; row: HTMLElement } | null>(null)
   const hits = filterBlocks(query), filtered = !!query.trim()
   const entries: Entry[] = hits.filter(b => !b.folder).map(b => ({ kind: 'block', key: b.id, b, inDir: false }))
+  if (WALK_LABEL.includes(query.trim().toLowerCase())) entries.push({ kind: 'walk', key: WALK_ROW }) // under Empty
   for (const name of GO2_FOLDERS) {
     const bs = hits.filter(b => b.folder === name), o = filtered || open.has(name)
     if (!bs.length) continue
@@ -112,7 +116,7 @@ export default function LibraryList({ query }: { query: string }) {
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault(); e.stopPropagation()
       if (en.kind === 'dir') toggle(en.name, e.key === 'ArrowRight')
-      else if (e.key === 'ArrowLeft' && en.b.folder) goTo(`dir:${en.b.folder}`)
+      else if (e.key === 'ArrowLeft' && en.kind === 'block' && en.b.folder) goTo(`dir:${en.b.folder}`)
       return
     }
     if (en.kind === 'dir' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(en.name); return }
@@ -120,7 +124,7 @@ export default function LibraryList({ query }: { query: string }) {
     const n = d && entries[ids.indexOf(en.key) + d]
     if (!n) return
     e.preventDefault(); e.stopPropagation()
-    if (n.kind === 'block') pick(n.key)
+    if (n.kind !== 'dir') pick(n.key)
     goTo(n.key)
   }
 
@@ -128,7 +132,13 @@ export default function LibraryList({ query }: { query: string }) {
     <>
       <div className="pp-cols" aria-hidden="true"><span>이름</span><span className="pp-col-kind">종류</span></div>
       <div ref={treeRef} role="tree" aria-label="라이브러리" className="pp-tree">
-        {entries.map(en => en.kind === 'dir' ? (
+        {entries.map(en => en.kind === 'walk' ? (
+          <div key={en.key} role="treeitem" className="pp-row" data-kind="walk" data-id={en.key} aria-selected={sel === en.key}
+            tabIndex={en.key === tabStop ? 0 : -1} onClick={() => pick(en.key)} onKeyDown={e => onKey(e, en)}>
+            <span className="pp-name" title="도착 위치와 시간으로 걸음을 계산해 만드는 이동 조각">{WALK_LABEL}</span>
+            <span className="pp-col-kind">이동</span>
+          </div>
+        ) : en.kind === 'dir' ? (
           <div key={en.key} role="treeitem" className="pp-row pp-bin" data-kind="blockdir" data-id={en.key} aria-expanded={en.open}
             tabIndex={en.key === tabStop ? 0 : -1} onClick={() => { setFocus(en.key); toggle(en.name) }} onKeyDown={e => onKey(e, en)}>
             <span className="pp-twisty" aria-hidden="true">{en.open ? '▾' : '▸'}</span>
@@ -161,7 +171,17 @@ export default function LibraryList({ query }: { query: string }) {
           </div>
         ))(en))}
       </div>
-      {sel && <div className="pp-blk">
+      {sel === WALK_ROW && <div className="pp-blk">
+        <label className="pp-blk-field"><span>붙일 로봇</span>
+          <select aria-label="붙일 로봇" value={walkTo} onChange={e => { setChoice(e.target.value); setMsg('') }}>
+            {go2s.map(a => <option key={a.id} value={a.id}>{a.name} (트랙 끝에 붙임)</option>)}
+            <option value="new">새 GO2 로봇 (0초부터)</option>
+          </select>
+        </label>
+        <WalkAddPanel actorId={walkTo === 'new' ? null : walkTo} onAdded={(actorId, text) => { setChoice(actorId); setMsg(text) }} />
+        {msg && <p className="pp-msg" aria-live="polite">{msg}</p>}
+      </div>}
+      {sel && sel !== WALK_ROW && <div className="pp-blk">
         {sel !== 'empty' && <label className="pp-blk-field"><span>붙일 로봇</span>
           <select aria-label="붙일 로봇" value={t} onChange={e => { setChoice(e.target.value); setMsg('') }}>
             {go2s.map(a => <option key={a.id} value={a.id}>{a.name} (트랙 끝에 붙임)</option>)}

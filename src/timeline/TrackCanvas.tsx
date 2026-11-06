@@ -256,7 +256,7 @@ export default function TrackCanvas() {
       } else if (e.shiftKey || pos(e).x < LABEL_W || pos(e).x >= W - SB_W) { // vertical scroll (Shift, or over the labels / scrollbar)
         const max = Math.max(0, rows().length * ROW_H - (H - top()))
         u.scrollY = Math.min(Math.max(u.scrollY + (e.deltaY || e.deltaX), 0), max)
-      } else { // 휠 = 구간 이동 (user, like the sequence): up = later; the playhead keeps following the pointer unless 고정
+      } else { // 휠 = 구간 이동 (user, like the sequence): down = later; the playhead keeps following the pointer unless 고정
         tv.scrollF = Math.max(minScrollF(), tv.scrollF + wheelFrames(e, tv.ppf))
         const f = hoverFrame(pos(e).x, LABEL_W, scale(), hoverOff())
         if (f !== null) hover.push(toSeq(f))

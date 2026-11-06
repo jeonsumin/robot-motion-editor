@@ -59,7 +59,7 @@ export function emptyBlockClip(frames: number, defs: RobotDefs): Clip {
   return { ...posesToClip(Array(frames).fill(pose), 60, 'go2', defs, `Empty_${frames}f`), hold: true }
 }
 /** The 목록's Empty clip (every Empty piece shares it, user), or a new 30-frame one. */
-export const emptyClipFor = (clips: Record<string, Clip>, defs: RobotDefs) => Object.values(clips).find(c => c.hold) ?? emptyBlockClip(EMPTY_FRAMES, defs)
+export const emptyClipFor = (clips: Record<string, Clip>, defs: RobotDefs) => Object.values(clips).find(c => c.hold && c.name !== '걷기' /* store WALK_CLIP: the 걷기 pieces' clip */) ?? emptyBlockClip(EMPTY_FRAMES, defs)
 
 /** Loop blocks: head + loop × n + tail source poses (n from `value`, as `blockActual`); fixed blocks: `poses`. */
 export function blockPoses(block: Block, poses: Pose[], value: number): Pose[] {

@@ -67,7 +67,7 @@ export function blendPose(a: Pose, b: Pose, w: number): Pose {
   }
 }
 
-const cache = new WeakMap<Project, Map<string, Map<string, Xf>>>() // Project is immutable per edit
+const cache = new WeakMap<Project, Map<string, Stitch>>() // Project is immutable per edit
 
 /** One frame on at the last velocity (x, y, yaw wrapped): where a piece cut onto `last` starts (see stitchTransforms). */
 export const advanceXf = (prev: Xf, last: Xf): Xf => ({
@@ -75,42 +75,57 @@ export const advanceXf = (prev: Xf, last: Xf): Xf => ({
   yaw: last.yaw + Math.atan2(Math.sin(last.yaw - prev.yaw), Math.cos(last.yaw - prev.yaw)),
 })
 
-export function stitchTransforms(p: Project, defs: RobotDefs, track: Track): Map<string, Xf> {
+type Stitch = { out: Map<string, Xf>; items: Item[]; i: number; busy: boolean }
+const stitchState = (p: Project, track: Track): Stitch => {
   let perTrack = cache.get(p)
   if (!perTrack) cache.set(p, perTrack = new Map())
-  const hit = perTrack.get(track.id)
-  if (hit) return hit
-  const out = new Map<string, Xf>()
-  perTrack.set(track.id, out)
-  const actor = p.actors.find(a => a.id === track.actorId)
-  const items = sortedItems(track)
-  let prev: Item | null = null
-  for (const it of items) {
-    let xf: Xf = { x: 0, y: 0, yaw: 0 }
-    const clip = itemClip(p, defs, it), prevClip = prev && itemClip(p, defs, prev)
-    if (prev && prevClip && clip && actor) {
-      const def = defs[actor.robot]
-      const pcf = Math.min(Math.max(it.start - prev.start + prev.trimIn, prev.trimIn), prev.trimOut - 1)
-      const P = applyXf(evaluateClip(prevClip, def, pcf), out.get(prev.id)!)
-      let [px, py] = P.rootPos, pyaw = quatYaw(P.rootQuat)
-      if (it.start - prev.start >= itemLen(prev)) {
-        // cut (no overlap): B's first frame follows A's last, so advance one frame at A's last velocity — else the root stalls a frame
-        const P0 = applyXf(evaluateClip(prevClip, def, Math.max(pcf - 1, prev.trimIn)), out.get(prev.id)!)
-        ;({ x: px, y: py, yaw: pyaw } = advanceXf({ x: P0.rootPos[0], y: P0.rootPos[1], yaw: quatYaw(P0.rootQuat) }, { x: px, y: py, yaw: pyaw }))
+  let st = perTrack.get(track.id)
+  if (!st) perTrack.set(track.id, st = { out: new Map(), items: sortedItems(track), i: 0, busy: false })
+  return st
+}
+/** Work the stitch out up to item index `upto` (inclusive). A 걷기 piece (§20) is played in track coordinates (its own clip is
+ * made from where the piece before it ends), so its transform is the identity and it is never evaluated here — which lets the
+ * walk ask for the transforms of the pieces before it while they are being worked out. */
+function advance(p: Project, defs: RobotDefs, track: Track, st: Stitch, upto: number) {
+  if (st.busy) return // re-entered (a walk asking while the pieces after it are worked out): what is there is all it needs
+  st.busy = true
+  try {
+    const actor = p.actors.find(a => a.id === track.actorId), { out, items } = st
+    for (; st.i <= Math.min(upto, items.length - 1); st.i++) {
+      const it = items[st.i], prev = st.i > 0 ? items[st.i - 1] : null
+      let xf: Xf = { x: 0, y: 0, yaw: 0 }
+      if (!it.walk && prev && actor) {
+        const clip = itemClip(p, defs, it), prevClip = itemClip(p, defs, prev)
+        if (clip && prevClip) {
+          const def = defs[actor.robot]
+          const pcf = Math.min(Math.max(it.start - prev.start + prev.trimIn, prev.trimIn), prev.trimOut - 1)
+          const P = applyXf(evaluateClip(prevClip, def, pcf), out.get(prev.id)!)
+          let [px, py] = P.rootPos, pyaw = quatYaw(P.rootQuat)
+          if (it.start - prev.start >= itemLen(prev)) {
+            // cut (no overlap): B's first frame follows A's last, so advance one frame at A's last velocity — else the root stalls a frame
+            const P0 = applyXf(evaluateClip(prevClip, def, Math.max(pcf - 1, prev.trimIn)), out.get(prev.id)!)
+            ;({ x: px, y: py, yaw: pyaw } = advanceXf({ x: P0.rootPos[0], y: P0.rootPos[1], yaw: quatYaw(P0.rootQuat) }, { x: px, y: py, yaw: pyaw }))
+          }
+          const C = evaluateClip(clip, def, it.trimIn)
+          const yaw = pyaw - quatYaw(C.rootQuat)
+          const c = Math.cos(yaw), s = Math.sin(yaw)
+          xf = { x: px - (c * C.rootPos[0] - s * C.rootPos[1]), y: py - (s * C.rootPos[0] + c * C.rootPos[1]), yaw }
+        }
       }
-      const C = evaluateClip(clip, def, it.trimIn)
-      const yaw = pyaw - quatYaw(C.rootQuat)
-      const c = Math.cos(yaw), s = Math.sin(yaw)
-      xf = {
-        x: px - (c * C.rootPos[0] - s * C.rootPos[1]),
-        y: py - (s * C.rootPos[0] + c * C.rootPos[1]),
-        yaw,
-      }
+      out.set(it.id, xf)
     }
-    out.set(it.id, xf)
-    prev = it
-  }
-  return out
+  } finally { st.busy = false }
+}
+export function stitchTransforms(p: Project, defs: RobotDefs, track: Track): Map<string, Xf> {
+  const st = stitchState(p, track)
+  advance(p, defs, track, st, Infinity)
+  return st.out
+}
+/** The stitch transform of one piece, working out only the pieces up to it (a 걷기 piece needs the one before it). */
+export function stitchXf(p: Project, defs: RobotDefs, track: Track, itemId: string): Xf | undefined {
+  const st = stitchState(p, track), k = st.items.findIndex(i => i.id === itemId)
+  if (k >= 0) advance(p, defs, track, st, k)
+  return st.out.get(itemId)
 }
 
 // Track rule: start >= 0, distinct starts, only neighbours overlap (never i and i+2), overlap <= min(len)-1.
